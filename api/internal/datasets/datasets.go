@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -188,7 +189,17 @@ func describeTable(ctx context.Context, db *sql.DB, name string) (contract.Table
 // JSONSafe converts a DuckDB value into something encoding/json renders well.
 func JSONSafe(v any, duckType string) any {
 	switch x := v.(type) {
-	case nil, bool, string, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil // encoding/json cannot represent NaN or infinity
+		}
+		return x
+	case float32:
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return nil
+		}
+		return x
+	case nil, bool, string, int8, int16, int32, int64, uint8, uint16, uint32, uint64:
 		return x
 	case time.Time:
 		if duckType == "DATE" {

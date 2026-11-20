@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"dataanalyst/api/internal/contract"
 	"dataanalyst/api/internal/datasets"
@@ -25,7 +26,7 @@ import (
 )
 
 const (
-	maxToolOutput = 8000 // characters of tool output the model sees
+	maxToolOutput = 8000 // bytes of tool output the model sees
 	maxSQLRows    = 50
 )
 
@@ -164,6 +165,13 @@ func (s *Server) keepCharts(ctx context.Context, run db.AgentRun, files []string
 		if filepath.Base(f) != f || !strings.HasSuffix(strings.ToLower(f), ".png") {
 			continue // only plain PNG names written by the runner
 		}
+		// Agent code controls /out. Lstat (not Stat) so a symlink to, say,
+		// /proc/self/environ is rejected instead of followed and served.
+		info, err := os.Lstat(filepath.Join(s.Layout.OutDir(sid), f))
+		if err != nil || !info.Mode().IsRegular() {
+			slog.Warn("ignoring non-regular file in sandbox out dir", "session", sid, "file", f)
+			continue
+		}
 		id := uuid.New()
 		dst := filepath.Join(s.Layout.ChartsDir(sid), id.String()+".png")
 		if err := os.Rename(filepath.Join(s.Layout.OutDir(sid), f), dst); err != nil {
@@ -222,9 +230,14 @@ func clearDir(dir string) {
 	}
 }
 
+// truncate keeps at most n bytes, never splitting a UTF-8 character
+// (Postgres rejects invalid UTF-8 in text columns).
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + fmt.Sprintf("\n[truncated %d more characters]", len(s)-n)
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + fmt.Sprintf("\n[truncated %d more bytes]", len(s)-n)
 }

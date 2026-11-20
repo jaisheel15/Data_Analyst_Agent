@@ -123,6 +123,11 @@
           }
         },
         {
+          "type": "object", "additionalProperties": false, "required": ["type", "usage"],
+          "description": "Running usage totals, sent after every model call so spend is charged even if the stream is cut.",
+          "properties": {"type": {"const": "usage"}, "usage": {"$ref": "#/$defs/Usage"}}
+        },
+        {
           "type": "object", "additionalProperties": false, "required": ["type", "error"],
           "properties": {"type": {"const": "error"}, "error": {"type": "string"}, "usage": {"$ref": "#/$defs/Usage"}}
         }

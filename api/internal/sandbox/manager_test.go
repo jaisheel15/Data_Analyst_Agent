@@ -174,18 +174,65 @@ func TestSandboxEnvironmentCarriesNoSecrets(t *testing.T) {
 	}
 }
 
-func TestCapacityLimitRejectsNewSessionsUntilOneStops(t *testing.T) {
+func TestCapacityLimitOnlyRejectsWhenEverySandboxIsBusy(t *testing.T) {
 	f := newFixture(t, func(c *sandbox.Config) { c.MaxSandboxes = 1 })
 	first, second := f.session(t), f.session(t)
-	f.python(t, first, "print(1)")
+	busy := make(chan sandbox.Result)
+	go func() { busy <- f.python(t, first, "import time\ntime.sleep(2)\nprint('first done')") }()
+	time.Sleep(700 * time.Millisecond) // first is now running code
+	if f.m.HasCapacity(second) {
+		t.Error("HasCapacity = true while the only sandbox is busy")
+	}
 	_, err := f.m.Exec(context.Background(), second, sandbox.Request{Mode: "python", Code: "print(1)"})
 	if !errors.Is(err, sandbox.ErrAtCapacity) {
 		t.Fatalf("err = %v, want ErrAtCapacity", err)
 	}
-	if err := f.m.Stop(context.Background(), first); err != nil {
-		t.Fatal(err)
+	if res := <-busy; strings.TrimSpace(res.Stdout) != "first done" {
+		t.Fatalf("first run disturbed: %+v", res)
 	}
-	f.python(t, second, "print(1)")
+	// first is now idle, so second evicts it instead of waiting 15 minutes.
+	if !f.m.HasCapacity(second) {
+		t.Error("HasCapacity = false although the only sandbox is idle")
+	}
+	if res := f.python(t, second, "print(2)"); strings.TrimSpace(res.Stdout) != "2" {
+		t.Fatalf("second = %+v", res)
+	}
+}
+
+func TestIdleReaperNeverRemovesASandboxThatIsRunningCode(t *testing.T) {
+	f := newFixture(t, func(c *sandbox.Config) { c.IdleTimeout = time.Millisecond })
+	id := f.session(t)
+	f.python(t, id, "print(0)") // create the sandbox, then let it look idle
+	done := make(chan sandbox.Result)
+	go func() { done <- f.python(t, id, "import time\ntime.sleep(2)\nprint('survived')") }()
+	time.Sleep(700 * time.Millisecond)
+	f.m.ReapIdle(time.Now().Add(time.Hour))
+	if res := <-done; strings.TrimSpace(res.Stdout) != "survived" {
+		t.Fatalf("exec was disturbed by the reaper: %+v", res)
+	}
+}
+
+func TestBackgroundProcessesDoNotSurviveTheirCallOrLingerAsZombies(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.session(t)
+	f.python(t, id, "import subprocess\nsubprocess.Popen(['sleep', '1000'], start_new_session=True)")
+	res := f.python(t, id, `import os, time
+time.sleep(0.3)
+found = []
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    try:
+        cmd = open(f'/proc/{pid}/cmdline', 'rb').read().replace(b'\0', b' ').decode().strip()
+        state = [l for l in open(f'/proc/{pid}/status') if l.startswith('State:')][0].split()[1]
+    except OSError:
+        continue
+    if cmd == 'sleep 1000':
+        found.append('leftover')
+    if state == 'Z':
+        found.append('zombie')
+print(','.join(found) or 'clean')`)
+	if strings.TrimSpace(res.Stdout) != "clean" {
+		t.Fatalf("processes from the previous call remain: %+v", res)
+	}
 }
 
 func TestMissingGVisorFallsBackToRunc(t *testing.T) {

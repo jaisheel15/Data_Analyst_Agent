@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"dataanalyst/api/internal/contract"
 	"dataanalyst/api/internal/sandbox"
@@ -148,5 +149,57 @@ func TestDescribeDatasetReadsTheRealSessionDatabase(t *testing.T) {
 	_, out = h.callTool("describe_dataset", toolReq(sid, run, `{"table":"nope"}`), internalToken)
 	if !strings.Contains(out.Error, "no table named") {
 		t.Errorf("error = %q", out.Error)
+	}
+}
+
+func TestSymlinksInTheOutDirAreNeverServedAsCharts(t *testing.T) {
+	h := newHarness(t, nil)
+	secret := filepath.Join(t.TempDir(), "secret.env")
+	if err := os.WriteFile(secret, []byte("ANTHROPIC_API_KEY=sk-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.sandbox.result = func(sessionID string, _ sandbox.Request) (sandbox.Result, error) {
+		// What `os.symlink('/proc/self/environ', '/out/a.png')` in agent code produces.
+		if err := os.Symlink(secret, filepath.Join(h.layout.OutDir(sessionID), "a.png")); err != nil {
+			t.Fatal(err)
+		}
+		return sandbox.Result{Files: []string{"a.png"}}, nil
+	}
+	sid := h.newSession()
+	_, out := h.callTool("run_python", toolReq(sid, h.startRun(sid), `{"code":"x"}`), internalToken)
+	if len(out.ChartIDs) != 0 || strings.Contains(out.Output, "chart saved") {
+		t.Fatalf("a symlink was accepted as a chart: %+v", out)
+	}
+	entries, _ := os.ReadDir(h.layout.ChartsDir(sid))
+	if len(entries) != 0 {
+		t.Fatalf("charts dir holds %d entries, want 0", len(entries))
+	}
+}
+
+func TestSQLNumbersReachTheModelInPlainNotation(t *testing.T) {
+	h := newHarness(t, nil)
+	h.sandbox.result = func(string, sandbox.Request) (sandbox.Result, error) {
+		return sandbox.Result{Columns: []string{"a", "b", "c", "d"},
+			Rows: [][]any{{float64(1000000), float64(1234567), 0.5, float64(20231115)}}, TotalRows: 1}, nil
+	}
+	sid := h.newSession()
+	_, out := h.callTool("run_sql", toolReq(sid, h.startRun(sid), `{"sql":"select 1"}`), internalToken)
+	if !strings.Contains(out.Output, "1000000\t1234567\t0.5\t20231115") {
+		t.Fatalf("output = %q", out.Output)
+	}
+}
+
+func TestTruncationNeverSplitsAMultiByteCharacter(t *testing.T) {
+	h := newHarness(t, nil)
+	h.sandbox.result = func(string, sandbox.Request) (sandbox.Result, error) {
+		return sandbox.Result{Stdout: "x" + strings.Repeat("€", 5000)}, nil // 8000 lands mid-character
+	}
+	sid := h.newSession()
+	resp, out := h.callTool("run_python", toolReq(sid, h.startRun(sid), `{"code":"1"}`), internalToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if !utf8.ValidString(out.Output) {
+		t.Fatal("truncated output is not valid UTF-8")
 	}
 }

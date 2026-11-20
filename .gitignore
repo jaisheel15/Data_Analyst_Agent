@@ -5,7 +5,7 @@ __pycache__/
 node_modules/
 .nuxt/
 .output/
-dist/
+dist
 /data/*
 api/bin/
 evals/results/*.json

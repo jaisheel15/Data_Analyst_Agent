@@ -116,3 +116,20 @@ def test_scratch_files_carry_results_between_calls(dirs):
 def test_session_database_is_read_only(dirs):
     result = run({**dirs, "mode": "sql", "code": "drop table sales"})
     assert "read-only" in result["error"].lower()
+
+
+def test_non_finite_floats_become_null_so_the_output_stays_valid_json(dirs):
+    proc = subprocess.run([sys.executable, str(RUNNER)], capture_output=True, text=True, input=json.dumps(
+        {**dirs, "mode": "sql", "code": "select 'NaN'::double a, 'inf'::double b, 1.5::double c"}))
+    assert "NaN" not in proc.stdout and "Infinity" not in proc.stdout
+    assert json.loads(proc.stdout)["rows"] == [[None, None, 1.5]]
+
+
+def test_a_locked_database_is_reported_not_replaced_by_an_empty_one(dirs):
+    writer = duckdb.connect(dirs["db_path"])  # as Go holds it during an upload
+    try:
+        result = run({**dirs, "mode": "sql", "code": "select count(*) from sales"})
+    finally:
+        writer.close()
+    assert "busy" in result["error"]
+    assert "does not exist" not in result["error"]

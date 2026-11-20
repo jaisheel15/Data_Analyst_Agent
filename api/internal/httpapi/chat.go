@@ -189,8 +189,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, run db.AgentRun,
 
 	start := s.Now()
 	finished := false
+	var lastUsage *contract.Usage // charged even if the run never reaches done
 	err := s.Agent.Run(r.Context(), req, func(ev contract.Event) error {
 		switch ev.Type {
+		case contract.EventUsage:
+			lastUsage = ev.Usage
 		case contract.EventStepStart:
 			send(ev.Type, map[string]any{"step": ev.Step})
 		case contract.EventToolCall:
@@ -215,7 +218,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, run db.AgentRun,
 				"steps": stepsOf(ev.Usage), "run_id": run.ID.String(), "message_id": msgID})
 		case contract.EventError:
 			finished = true
-			s.finish(run, finishInfo{status: "error", errText: ev.Error, usage: ev.Usage, latency: s.Now().Sub(start)})
+			usage := ev.Usage
+			if usage == nil {
+				usage = lastUsage
+			}
+			s.finish(run, finishInfo{status: "error", errText: ev.Error, usage: usage, latency: s.Now().Sub(start)})
 			send(ev.Type, map[string]string{"error": ev.Error})
 		}
 		return nil
@@ -224,10 +231,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, run db.AgentRun,
 	case finished:
 	case r.Context().Err() != nil:
 		// The browser went away; the agent service saw the stream close.
-		s.finish(run, finishInfo{status: "cancelled", latency: s.Now().Sub(start)})
+		s.finish(run, finishInfo{status: "cancelled", usage: lastUsage, latency: s.Now().Sub(start)})
 	default:
 		slog.Error("agent run failed", "run", run.ID, "err", err)
-		s.finish(run, finishInfo{status: "error", errText: errText(err), latency: s.Now().Sub(start)})
+		s.finish(run, finishInfo{status: "error", errText: errText(err), usage: lastUsage, latency: s.Now().Sub(start)})
 		send(contract.EventError, map[string]string{"error": "the agent stopped unexpectedly; please try again"})
 	}
 }

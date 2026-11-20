@@ -48,9 +48,15 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
         get_stream_writer()({"type": "answer_delta", "text": answer})
         return {"messages": [message], "answer": answer, "status": status}
 
+    def record(reply: AIMessage) -> None:
+        # Report the running total after every model call, so Go can charge
+        # it even if the stream is cut before `done`.
+        usage.add(reply.usage_metadata)
+        get_stream_writer()({"type": "usage", "usage": usage.model_dump()})
+
     async def agent(state: RunState) -> dict:
         reply = await with_tools.ainvoke(state["messages"])
-        usage.add(reply.usage_metadata)
+        record(reply)
         if reply.tool_calls:
             return {"messages": [reply]}
         return finish(reply, "done")
@@ -77,7 +83,7 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
     async def wrap_up(state: RunState) -> dict:
         nudge = HumanMessage(WRAP_UP.format(max_steps=max_steps))
         reply = await no_more_tools.ainvoke([*state["messages"], nudge])
-        usage.add(reply.usage_metadata)
+        record(reply)
         return finish(reply, "budget_exhausted") | {"messages": [nudge, reply]}
 
     def after_agent(state: RunState) -> str:

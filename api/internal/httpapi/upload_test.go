@@ -91,3 +91,19 @@ func TestUploadErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestNaNValuesInUploadsBecomeNull(t *testing.T) {
+	h := newHarness(t, nil)
+	sid := h.newSession()
+	table := h.mustUpload(sid, "nan.csv", []byte("a,b\n1,NaN\n2,inf\n3,1.5\n"))
+	if table.SampleRows[0][1] != nil || table.SampleRows[1][1] != nil || table.SampleRows[2][1] != 1.5 {
+		t.Fatalf("sample rows = %v", table.SampleRows)
+	}
+	// The session (and its schema in every run request) must keep working.
+	if resp, _ := h.ask(sid, "q"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("ask status = %d", resp.StatusCode)
+	}
+	if got := h.agent.lastRequest(t).Schema[0].SampleRows[0][1]; got != nil {
+		t.Fatalf("run request sample = %v", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"dataanalyst/api/internal/history"
 )
@@ -76,5 +77,14 @@ func TestNoTurnsGivesEmptyNonNilHistory(t *testing.T) {
 	got := history.Build(nil)
 	if got == nil || len(got) != 0 {
 		t.Fatalf("got %#v, want empty slice (serialises as [])", got)
+	}
+}
+
+func TestCuttingNeverSplitsAMultiByteCharacter(t *testing.T) {
+	ts := turns(1)
+	ts[0].Steps[0].Output = "xx" + strings.Repeat("€", 400) // byte 1024 lands mid-character
+	out := history.Build(ts)[0].Steps[0].Output
+	if !utf8.ValidString(out) {
+		t.Fatal("cut output is not valid UTF-8")
 	}
 }

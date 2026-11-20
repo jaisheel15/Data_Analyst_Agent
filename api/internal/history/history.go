@@ -5,6 +5,7 @@ package history
 import (
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"dataanalyst/api/internal/contract"
 )
@@ -49,9 +50,13 @@ func Build(turns []StoredTurn) []contract.Turn {
 	return out
 }
 
+// cut keeps at most n bytes, never splitting a UTF-8 character.
 func cut(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + fmt.Sprintf("\n[truncated %d more bytes]", len(s)-n)
 }

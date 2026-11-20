@@ -200,8 +200,8 @@ func TestNoFreeSandboxGets503(t *testing.T) {
 func TestDailyBudgetStopsChatButNotEvals(t *testing.T) {
 	h := newHarness(t, func(c *httpapi.Config) { c.DailyChatBudgetUSD = 0.20 })
 	sid := h.newSession()
-	h.ask(sid, "one")  // $0.15
-	h.ask(sid, "two")  // $0.30 total: over the cap
+	h.ask(sid, "one") // $0.15
+	h.ask(sid, "two") // $0.30 total: over the cap
 	resp, _ := h.ask(sid, "three")
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", resp.StatusCode)
@@ -301,3 +301,45 @@ var (
 	_ = os.Stat
 	_ = filepath.Join
 )
+
+func TestDisconnectingStillChargesTheUsageReportedSoFar(t *testing.T) {
+	h := newHarness(t, func(c *httpapi.Config) { c.DailyChatBudgetUSD = 0.10 })
+	sid := h.newSession()
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	h.agent.setRun(func(ctx context.Context, _ contract.RunRequest, emit func(contract.Event)) {
+		emit(contract.Event{Type: "usage", Usage: &contract.Usage{Model: "test-model", InputTokens: 2000}}) // $0.20
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go h.askCtx(ctx, sid, "expensive question, then close the tab")
+	<-started
+	cancel()
+	<-stopped
+	h.agent.setRun(nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, _ := h.ask(sid, "next")
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return // the cancelled run's $0.20 counted against the $0.10 cap
+		}
+		if resp.StatusCode == http.StatusOK || time.Now().After(deadline) {
+			t.Fatalf("status = %d: the disconnected run's spend was not counted", resp.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond) // 409 while the cancelled run is being finished
+	}
+}
+
+func TestUsageEventsAreNotSentToTheBrowser(t *testing.T) {
+	h := newHarness(t, nil)
+	h.agent.setRun(func(_ context.Context, _ contract.RunRequest, emit func(contract.Event)) {
+		emit(contract.Event{Type: "usage", Usage: &contract.Usage{Model: "test-model", InputTokens: 10}})
+		emit(doneEvent("ok"))
+	})
+	_, events := h.ask(h.newSession(), "q")
+	if types(events) != "done" {
+		t.Fatalf("events = %s", types(events))
+	}
+}

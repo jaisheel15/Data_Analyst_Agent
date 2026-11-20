@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"dataanalyst/api/internal/contract"
@@ -91,9 +93,19 @@ func ident(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+// cell renders a value as the model should read it: numbers in plain
+// notation (1000000, never 1e+06).
 func cell(v any) string {
-	if v == nil {
+	switch x := v.(type) {
+	case nil:
 		return "NULL"
+	case json.Number:
+		return x.String()
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(x), 'f', -1, 32)
+	default:
+		return fmt.Sprint(x)
 	}
-	return fmt.Sprint(v)
 }

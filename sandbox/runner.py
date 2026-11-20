@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import linecache
+import math
 import os
 import sys
 import traceback
@@ -27,14 +28,21 @@ DEFAULTS = {
 }
 
 
+class DatabaseBusy(RuntimeError):
+    pass
+
+
 def _connect(db_path: str):
     import duckdb
 
-    try:
-        return duckdb.connect(db_path, read_only=True)
-    except duckdb.IOException:
+    if not os.path.exists(db_path):
         # No dataset uploaded yet: give the agent an empty in-memory database.
         return duckdb.connect(":memory:")
+    try:
+        return duckdb.connect(db_path, read_only=True)
+    except duckdb.IOException as exc:
+        # Most likely Go holds the write lock while loading an upload.
+        raise DatabaseBusy(f"the database is busy (an upload is in progress); try again in a moment ({exc})") from exc
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:
@@ -74,7 +82,10 @@ def run_python(req: dict) -> dict:
     before = _pngs(req["out_dir"])
     out = io.StringIO()
     err = io.StringIO()
-    con = _connect(req["db_path"])
+    try:
+        con = _connect(req["db_path"])
+    except DatabaseBusy as exc:
+        return {"stdout": "", "stderr": "", "error": str(exc), "truncated": False, "files": []}
     scope = {"con": con, "SCRATCH": req["scratch_dir"], "OUT": req["out_dir"],
              "__name__": "__main__"}
     error = None
@@ -95,6 +106,8 @@ def run_python(req: dict) -> dict:
 
 
 def _json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None  # NaN and infinity are not valid JSON
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     import decimal
@@ -107,7 +120,10 @@ def _json_safe(value):
 
 
 def run_sql(req: dict) -> dict:
-    con = _connect(req["db_path"])
+    try:
+        con = _connect(req["db_path"])
+    except DatabaseBusy as exc:
+        return {"columns": [], "rows": [], "total_rows": 0, "truncated": False, "error": str(exc)}
     try:
         cur = con.execute(req["code"])
         columns = [d[0] for d in cur.description] if cur.description else []
@@ -137,7 +153,7 @@ def main() -> None:
         result = run_sql(req)
     else:
         result = {"error": f"unknown mode: {req['mode']!r}"}
-    json.dump(result, sys.__stdout__)
+    json.dump(result, sys.__stdout__, allow_nan=False)
 
 
 if __name__ == "__main__":

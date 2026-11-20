@@ -47,7 +47,7 @@ func (f *fakeSandbox) Exec(_ context.Context, sessionID string, req sandbox.Requ
 	return sandbox.Result{Stdout: "ok"}, nil
 }
 
-func (f *fakeSandbox) HasCapacity(string) bool          { return !f.full }
+func (f *fakeSandbox) HasCapacity(string) bool            { return !f.full }
 func (f *fakeSandbox) Stop(context.Context, string) error { return nil }
 
 // fakeAgent is a fake agent service over HTTP. It speaks the real NDJSON

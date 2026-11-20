@@ -83,10 +83,14 @@ type Result struct {
 	TimedOut  bool     `json:"timed_out"`
 }
 
+// box is one session's sandbox. Lock order: Manager.mu, then box.mu (only
+// ever TryLock'd while Manager.mu is held, so the order cannot deadlock).
 type box struct {
-	containerID string
-	lastUsed    time.Time
-	mu          sync.Mutex // one exec at a time per session
+	mu          sync.Mutex // held while the box is created and during each exec
+	containerID string     // guarded by mu
+
+	lastUsed time.Time // guarded by Manager.mu
+	removed  bool      // guarded by Manager.mu: dropped from the map, container going away
 }
 
 type Manager struct {
@@ -113,12 +117,21 @@ func New(ctx context.Context, cli *client.Client, cfg Config) (*Manager, error) 
 	return m, nil
 }
 
-// HasCapacity reports whether sessionID has a sandbox or one could be created.
+// HasCapacity reports whether sessionID has a sandbox or one could be had now,
+// either free or by evicting another session's idle sandbox.
 func (m *Manager) HasCapacity(sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.boxes[sessionID]
-	return ok || len(m.boxes) < m.cfg.MaxSandboxes
+	if _, ok := m.boxes[sessionID]; ok || len(m.boxes) < m.cfg.MaxSandboxes {
+		return true
+	}
+	for _, b := range m.boxes {
+		if b.mu.TryLock() {
+			b.mu.Unlock()
+			return true
+		}
+	}
+	return false
 }
 
 // Runtime reports the container runtime actually in use.
@@ -127,13 +140,12 @@ func (m *Manager) Runtime() string { return m.runtime }
 // Exec runs one request in the session's sandbox, creating it if needed.
 // Failures of the agent's code come back in Result.Error, not as an error.
 func (m *Manager) Exec(ctx context.Context, sessionID string, req Request) (Result, error) {
-	b, err := m.acquire(ctx, sessionID)
+	b, err := m.lockedBox(ctx, sessionID)
 	if err != nil {
 		return Result{}, err
 	}
-	b.mu.Lock()
 	defer b.mu.Unlock()
-	defer func() { m.touch(b) }()
+	defer m.touch(b)
 
 	res, err := m.execOnce(ctx, b, req)
 	switch {
@@ -225,7 +237,10 @@ func (m *Manager) interpret(exit int, elapsed time.Duration, stdout []byte, stde
 	var res Result
 	if exit == 0 {
 		// Decode only the first JSON value: stray output can follow it.
-		if err := json.NewDecoder(bytes.NewReader(stdout)).Decode(&res); err == nil {
+		// UseNumber keeps 1000000 and big int64 IDs exact (no float64 detour).
+		dec := json.NewDecoder(bytes.NewReader(stdout))
+		dec.UseNumber()
+		if err := dec.Decode(&res); err == nil {
 			return res
 		}
 		return Result{Error: "sandbox runner produced invalid output: " + tail(stderr, 500)}
@@ -241,13 +256,25 @@ func (m *Manager) interpret(exit int, elapsed time.Duration, stdout []byte, stde
 }
 
 // killStragglers ends any process the agent's code left behind (for example
-// forked children). kill -1 never signals PID 1, the container's idle process.
+// a child started in its own session, which escapes timeout's process group).
+// kill -1 signals every process the sandbox user may signal except PID 1 (the
+// container's idle process) and the caller. The image has no kill binary, so
+// it runs as the shell builtin.
 func (m *Manager) killStragglers(ctx context.Context, b *box) {
 	ex, err := m.cli.ExecCreate(ctx, b.containerID, client.ExecCreateOptions{
-		User: sandboxUID, Env: execEnv, Cmd: []string{"kill", "-9", "-1"},
+		User: sandboxUID, Env: execEnv, Cmd: []string{"sh", "-c", "kill -9 -1 2>/dev/null; true"},
 	})
-	if err == nil {
-		_, _ = m.cli.ExecStart(ctx, ex.ID, client.ExecStartOptions{})
+	if err != nil {
+		slog.Warn("kill stragglers", "err", err)
+		return
+	}
+	if _, err := m.cli.ExecStart(ctx, ex.ID, client.ExecStartOptions{}); err != nil {
+		slog.Warn("kill stragglers", "err", err)
+		return
+	}
+	// ExecStart returns at once; wait so the next call starts on a clean slate.
+	if code, err := m.exitCode(ctx, ex.ID); err != nil || code != 0 {
+		slog.Warn("kill stragglers did not finish cleanly", "code", code, "err", err)
 	}
 }
 
@@ -265,22 +292,86 @@ func (m *Manager) exitCode(ctx context.Context, execID string) (int, error) {
 	return 0, errors.New("exec still running after output closed")
 }
 
+// lockedBox returns the session's sandbox with its mu held, creating it (and
+// evicting an idle sandbox if at capacity) when needed.
+func (m *Manager) lockedBox(ctx context.Context, sessionID string) (*box, error) {
+	for {
+		b, err := m.acquire(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		b.mu.Lock()
+		m.mu.Lock()
+		removed := b.removed
+		m.mu.Unlock()
+		if !removed {
+			return b, nil
+		}
+		b.mu.Unlock() // reaped or evicted while we waited: get a fresh one
+	}
+}
+
 func (m *Manager) acquire(ctx context.Context, sessionID string) (*box, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if b, ok := m.boxes[sessionID]; ok {
+		b.lastUsed = time.Now() // so the reaper does not pick it while we wait for b.mu
+		m.mu.Unlock()
 		return b, nil
 	}
+	var victim *box
 	if len(m.boxes) >= m.cfg.MaxSandboxes {
-		return nil, ErrAtCapacity
+		victim = m.evictLocked()
+		if victim == nil {
+			m.mu.Unlock()
+			return nil, ErrAtCapacity
+		}
 	}
+	// Reserve the slot with a locked placeholder, then create the container
+	// without holding m.mu: Docker calls are slow.
+	b := &box{lastUsed: time.Now()}
+	b.mu.Lock()
+	m.boxes[sessionID] = b
+	m.mu.Unlock()
+	if victim != nil {
+		m.remove(victim.containerID)
+	}
+
 	id, err := m.create(ctx, sessionID)
 	if err != nil {
+		m.mu.Lock()
+		if m.boxes[sessionID] == b {
+			delete(m.boxes, sessionID)
+		}
+		b.removed = true
+		m.mu.Unlock()
+		b.mu.Unlock()
 		return nil, err
 	}
-	b := &box{containerID: id, lastUsed: time.Now()}
-	m.boxes[sessionID] = b
+	b.containerID = id
+	b.mu.Unlock()
 	return b, nil
+}
+
+// evictLocked drops the least recently used sandbox that is not running code.
+// m.mu must be held. The victim's container must be removed by the caller.
+func (m *Manager) evictLocked() *box {
+	var victimID string
+	var victim *box
+	for sid, b := range m.boxes {
+		if (victim == nil || b.lastUsed.Before(victim.lastUsed)) && b.mu.TryLock() {
+			if victim != nil {
+				victim.mu.Unlock()
+			}
+			victim, victimID = b, sid
+		}
+	}
+	if victim == nil {
+		return nil
+	}
+	victim.removed = true
+	delete(m.boxes, victimID)
+	victim.mu.Unlock()
+	return victim
 }
 
 func (m *Manager) create(ctx context.Context, sessionID string) (string, error) {
@@ -323,12 +414,17 @@ func (m *Manager) create(ctx context.Context, sessionID string) (string, error) 
 	return created.ID, nil
 }
 
+// recreate swaps b's container for a fresh one. b.mu must be held.
 func (m *Manager) recreate(ctx context.Context, sessionID string, b *box) error {
 	m.remove(b.containerID)
 	id, err := m.create(ctx, sessionID)
 	if err != nil {
+		b.containerID = ""
 		m.mu.Lock()
-		delete(m.boxes, sessionID)
+		if m.boxes[sessionID] == b {
+			delete(m.boxes, sessionID)
+		}
+		b.removed = true
 		m.mu.Unlock()
 		return err
 	}
@@ -342,30 +438,41 @@ func (m *Manager) touch(b *box) {
 	m.mu.Unlock()
 }
 
-// Stop removes the session's sandbox, if any.
+// Stop removes the session's sandbox, if any, waiting for a running exec.
 func (m *Manager) Stop(ctx context.Context, sessionID string) error {
 	m.mu.Lock()
 	b, ok := m.boxes[sessionID]
-	delete(m.boxes, sessionID)
+	if ok {
+		delete(m.boxes, sessionID)
+		b.removed = true
+	}
 	m.mu.Unlock()
 	if ok {
-		m.remove(b.containerID)
+		b.mu.Lock()
+		id := b.containerID
+		b.mu.Unlock()
+		m.remove(id)
 	}
 	return nil
 }
 
-// ReapIdle removes sandboxes unused for longer than IdleTimeout.
+// ReapIdle removes sandboxes unused for longer than IdleTimeout. A sandbox
+// that is running code is never reaped, however old its lastUsed.
 func (m *Manager) ReapIdle(now time.Time) {
 	m.mu.Lock()
-	var idle []string
+	var ids []string
 	for sid, b := range m.boxes {
-		if now.Sub(b.lastUsed) > m.cfg.IdleTimeout {
-			idle = append(idle, sid)
+		if now.Sub(b.lastUsed) <= m.cfg.IdleTimeout || !b.mu.TryLock() {
+			continue
 		}
+		b.removed = true
+		delete(m.boxes, sid)
+		ids = append(ids, b.containerID)
+		b.mu.Unlock()
 	}
 	m.mu.Unlock()
-	for _, sid := range idle {
-		_ = m.Stop(context.Background(), sid)
+	for _, id := range ids {
+		m.remove(id)
 	}
 }
 
@@ -388,9 +495,15 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	m.mu.Lock()
 	boxes := m.boxes
 	m.boxes = map[string]*box{}
+	for _, b := range boxes {
+		b.removed = true
+	}
 	m.mu.Unlock()
 	for _, b := range boxes {
-		m.remove(b.containerID)
+		b.mu.Lock()
+		id := b.containerID
+		b.mu.Unlock()
+		m.remove(id)
 	}
 }
 
@@ -407,6 +520,9 @@ func (m *Manager) removeLeftovers(ctx context.Context) {
 }
 
 func (m *Manager) remove(id string) {
+	if id == "" {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_, _ = m.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})

@@ -124,4 +124,5 @@ async def stream_run(client: httpx.AsyncClient, body: dict, token: str = TOKEN) 
 
 
 def types(events: list[dict]) -> list[str]:
-    return [e["type"] for e in events]
+    """Event types in order, leaving out the running `usage` events (tested on their own)."""
+    return [e["type"] for e in events if e["type"] != "usage"]

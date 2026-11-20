@@ -9,9 +9,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
  && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox \
  && mkdir -p /data /out /scratch
 
-COPY runner.py /app/runner.py
+COPY runner.py reaper.py /app/
 
 USER 10001
 WORKDIR /tmp
-# The container idles; the Go sandbox manager runs `python /app/runner.py` via exec.
-CMD ["sleep", "infinity"]
+# PID 1 idles and reaps orphans; the Go sandbox manager runs `python /app/runner.py` via exec.
+CMD ["python", "/app/reaper.py"]

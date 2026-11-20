@@ -5,6 +5,7 @@ async def test_direct_answer_streams_the_answer_then_done_with_usage(make_client
     llm = FakeLLM(script=[ai("The total is 35.", inp=500, out=20, cache_read=300, cache_write=100)])
     async with make_client(llm) as client:
         status, events = await stream_run(client, run_request())
+    events = [e for e in events if e["type"] != "usage"]
     assert status == 200
     assert types(events) == ["answer_delta", "done"]
     assert events[0]["text"] == "The total is 35."
@@ -23,6 +24,7 @@ async def test_tool_loop_streams_each_step_and_feeds_results_back(make_client, g
                           ai("Total is 35.")])
     async with make_client(llm) as client:
         _, events = await stream_run(client, run_request())
+    events = [e for e in events if e["type"] != "usage"]
     assert types(events) == ["step_start", "tool_call", "tool_result", "answer_delta", "done"]
     assert events[1] == {"type": "tool_call", "step": 1, "tool": "run_sql",
                          "input": {"sql": "select sum(amount) from sales"}}
@@ -124,3 +126,15 @@ async def test_missing_api_key_streams_an_error_event_naming_the_variable(go):
         status, events = await stream_run(client, run_request())
     assert status == 200
     assert types(events) == ["error"] and "ANTHROPIC_API_KEY" in events[0]["error"]
+
+
+async def test_running_usage_is_reported_after_every_model_call(make_client):
+    # Go records this even if the stream is cut, so closing the tab cannot dodge the spend cap.
+    llm = FakeLLM(script=[ai(tool_calls=[tool("run_sql", sql="select 1")], inp=100, out=10), ai("ok", inp=300, out=20)])
+    async with make_client(llm) as client:
+        _, events = await stream_run(client, run_request())
+    usage = [e["usage"] for e in events if e["type"] == "usage"]
+    assert [(u["input_tokens"], u["output_tokens"]) for u in usage] == [(100, 10), (400, 30)]
+    first_usage = next(i for i, e in enumerate(events) if e["type"] == "usage")
+    first_tool = next(i for i, e in enumerate(events) if e["type"] == "tool_call")
+    assert first_usage < first_tool  # reported before the tools run, not only at the end
