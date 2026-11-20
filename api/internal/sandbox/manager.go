@@ -113,6 +113,14 @@ func New(ctx context.Context, cli *client.Client, cfg Config) (*Manager, error) 
 	return m, nil
 }
 
+// HasCapacity reports whether sessionID has a sandbox or one could be created.
+func (m *Manager) HasCapacity(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.boxes[sessionID]
+	return ok || len(m.boxes) < m.cfg.MaxSandboxes
+}
+
 // Runtime reports the container runtime actually in use.
 func (m *Manager) Runtime() string { return m.runtime }
 

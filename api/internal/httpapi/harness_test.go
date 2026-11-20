@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"dataanalyst/api/internal/agentclient"
 	"dataanalyst/api/internal/contract"
 	"dataanalyst/api/internal/cost"
 	"dataanalyst/api/internal/db"
@@ -49,22 +50,64 @@ func (f *fakeSandbox) Exec(_ context.Context, sessionID string, req sandbox.Requ
 func (f *fakeSandbox) HasCapacity(string) bool          { return !f.full }
 func (f *fakeSandbox) Stop(context.Context, string) error { return nil }
 
-// fakeAgent plays a scripted agent: run gets the request and an emit func.
+// fakeAgent is a fake agent service over HTTP. It speaks the real NDJSON
+// protocol, so the real agentclient is exercised too. run gets the decoded
+// request, the request context (cancelled when Go hangs up), and an emit func.
 type fakeAgent struct {
 	mu   sync.Mutex
 	reqs []contract.RunRequest
-	run  func(ctx context.Context, req contract.RunRequest, emit func(contract.Event) error) error
+	run  func(ctx context.Context, req contract.RunRequest, emit func(contract.Event))
+	srv  *httptest.Server
 }
 
-func (f *fakeAgent) Run(ctx context.Context, req contract.RunRequest, emit func(contract.Event) error) error {
+func newFakeAgent(t *testing.T) *fakeAgent {
+	f := &fakeAgent{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Token") != internalToken {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		var req contract.RunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		f.reqs = append(f.reqs, req)
+		run := f.run
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		emit := func(ev contract.Event) {
+			line, _ := json.Marshal(ev)
+			w.Write(append(line, '\n'))
+			w.(http.Flusher).Flush()
+		}
+		if run == nil {
+			emit(doneEvent("fine"))
+			return
+		}
+		run(r.Context(), req, emit)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func doneEvent(answer string) contract.Event {
+	return contract.Event{Type: contract.EventDone, Answer: answer, Status: "done",
+		Usage: &contract.Usage{Provider: "anthropic", Model: "test-model",
+			InputTokens: 1000, OutputTokens: 100, Steps: 1}} // $0.10 + $0.05 at test prices
+}
+
+func (f *fakeAgent) setRun(run func(ctx context.Context, req contract.RunRequest, emit func(contract.Event))) {
 	f.mu.Lock()
-	f.reqs = append(f.reqs, req)
+	f.run = run
 	f.mu.Unlock()
-	if f.run == nil {
-		return emit(contract.Event{Type: contract.EventDone, Answer: "fine", Status: "done",
-			Usage: &contract.Usage{Model: "test-model", InputTokens: 1000, OutputTokens: 100}})
-	}
-	return f.run(ctx, req, emit)
+}
+
+func (f *fakeAgent) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.reqs)
 }
 
 func (f *fakeAgent) lastRequest(t *testing.T) contract.RunRequest {
@@ -93,7 +136,7 @@ func newHarness(t *testing.T, tweak func(*httpapi.Config)) *harness {
 	t.Helper()
 	pool := testenv.Postgres(t)
 	layout := storage.Layout{Root: t.TempDir()}
-	h := &harness{t: t, pool: pool, layout: layout, sandbox: &fakeSandbox{}, agent: &fakeAgent{},
+	h := &harness{t: t, pool: pool, layout: layout, sandbox: &fakeSandbox{}, agent: newFakeAgent(t),
 		now: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)}
 	cfg := httpapi.Config{
 		InternalToken:      internalToken,
@@ -112,7 +155,7 @@ func newHarness(t *testing.T, tweak func(*httpapi.Config)) *harness {
 		Pool:    pool,
 		Layout:  layout,
 		Sandbox: h.sandbox,
-		Agent:   h.agent,
+		Agent:   agentclient.New(h.agent.srv.URL, internalToken),
 		Pricing: cost.Pricing{"test-model": {InputPerMTok: 100, OutputPerMTok: 500}},
 		Now:     func() time.Time { return h.now },
 		Config:  cfg,
