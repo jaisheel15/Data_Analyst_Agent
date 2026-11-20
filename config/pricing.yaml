@@ -1,0 +1,31 @@
+# USD per million tokens. Keys are the exact model IDs sent to the provider.
+# The API refuses to start a run for a model missing from this file, so the
+# spend cap can never silently undercount.
+#
+# Sources, checked 2026-11-20:
+#   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
+#     cache_write uses the 5-minute cache-write price.
+#   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
+#     DeepSeek has peak and off-peak prices; these are the PEAK prices, so
+#     cost estimates err high. DeepSeek charges cache writes as normal input.
+models:
+  claude-haiku-5-5:        # prices for prompts up to 100,000 tokens (ours are far below)
+    input_per_mtok: 0.10
+    output_per_mtok: 0.50
+    cache_read_per_mtok: 0.01
+    cache_write_per_mtok: 0.125
+  claude-sonnet-5-5:
+    input_per_mtok: 2.00
+    output_per_mtok: 10.00
+    cache_read_per_mtok: 0.10
+    cache_write_per_mtok: 2.50
+  deepseek-flash:
+    input_per_mtok: 0.30
+    output_per_mtok: 1.20
+    cache_read_per_mtok: 0.006
+    cache_write_per_mtok: 0.30
+  deepseek-v4-pro:
+    input_per_mtok: 1.32
+    output_per_mtok: 3.96
+    cache_read_per_mtok: 0.044
+    cache_write_per_mtok: 1.32
