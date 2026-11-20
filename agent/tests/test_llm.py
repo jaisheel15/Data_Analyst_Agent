@@ -2,7 +2,7 @@ import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_deepseek import ChatDeepSeek
 
-from app.llm import make_llm
+from app.llm import MissingAPIKey, make_llm
 
 
 def test_anthropic_and_deepseek_build_their_own_clients(monkeypatch):
@@ -19,3 +19,10 @@ def test_anthropic_and_deepseek_build_their_own_clients(monkeypatch):
 def test_unknown_provider_is_a_value_error():
     with pytest.raises(ValueError, match="unknown provider"):
         make_llm("openai", "gpt", 100)
+
+
+@pytest.mark.parametrize(("provider", "var"), [("anthropic", "ANTHROPIC_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY")])
+def test_missing_api_key_is_a_clear_error(monkeypatch, provider, var):
+    monkeypatch.setenv(var, "")
+    with pytest.raises(MissingAPIKey, match=var):
+        make_llm(provider, "some-model", 100)

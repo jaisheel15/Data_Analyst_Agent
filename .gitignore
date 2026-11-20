@@ -6,7 +6,8 @@ node_modules/
 .nuxt/
 .output/
 dist/
-/data/
+/data/*
 api/bin/
 evals/results/*.json
 !evals/results/.gitkeep
+!/data/.gitkeep

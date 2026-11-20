@@ -1,0 +1,106 @@
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --text: #1d1d1b;
+  --muted: #6b6b66;
+  --border: #e2e2dc;
+  --accent: #2f5bd3;
+  --accent-text: #ffffff;
+  --code-bg: #f1f1ee;
+  --bad: #b3261e;
+  --warn: #8a5a00;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --panel: #1d1d1b;
+    --text: #ececea;
+    --muted: #a0a09a;
+    --border: #33332f;
+    --accent: #7c9cff;
+    --accent-text: #0d0d0c;
+    --code-bg: #262624;
+    --bad: #ff8a80;
+    --warn: #ffcc66;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px; }
+button {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button[type="submit"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.link { border: none; background: none; padding: 0; color: var(--accent); }
+
+.shell { max-width: 1280px; margin: 0 auto; padding: 16px; }
+.top h1 { margin: 0; font-size: 22px; }
+.tagline { margin: 2px 0 12px; color: var(--muted); }
+.banner { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--bad); }
+.layout { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.panel h2 { margin: 0 0 12px; font-size: 16px; }
+.muted { color: var(--muted); }
+.bad, .error { color: var(--bad); }
+.warn { color: var(--warn); }
+
+.drop {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 20px; border: 2px dashed var(--border); border-radius: 8px; cursor: pointer; text-align: center;
+}
+.drop.dragging { border-color: var(--accent); }
+.drop span { color: var(--muted); font-size: 13px; }
+.notice { font-size: 12px; color: var(--muted); margin: 8px 0; }
+.samples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; margin-bottom: 12px; }
+.tables { list-style: none; padding: 0; margin: 0 0 12px; }
+.tables li { border-top: 1px solid var(--border); padding: 6px 0; }
+.table-name { border: none; padding: 0; background: none; text-align: left; width: 100%; }
+.schema { overflow-x: auto; margin-top: 6px; }
+.schema table { border-collapse: collapse; font-size: 12px; }
+.schema th, .schema td { border: 1px solid var(--border); padding: 2px 6px; white-space: nowrap; text-align: left; }
+
+.chat { display: flex; flex-direction: column; height: calc(100vh - 110px); min-height: 480px; }
+.log { flex: 1; overflow-y: auto; padding-right: 4px; }
+.empty { margin-top: 24px; text-align: center; }
+.ask { display: flex; gap: 8px; margin-top: 12px; }
+.ask textarea {
+  flex: 1; resize: vertical; font: inherit; padding: 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+
+.turn { border-top: 1px solid var(--border); padding: 12px 0; }
+.turn:first-child { border-top: none; }
+.question { font-weight: 600; margin: 0 0 8px; }
+.steps ol { margin: 6px 0; padding-left: 20px; }
+.steps li { margin-bottom: 8px; }
+.steps li.failed .step-head code { color: var(--bad); }
+.step-head { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+pre {
+  background: var(--code-bg); padding: 8px; border-radius: 6px; margin: 4px 0;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 240px;
+}
+pre.err { color: var(--bad); }
+.charts { display: grid; gap: 8px; margin: 8px 0; }
+.charts img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.answer :first-child { margin-top: 0; }
+.answer table { border-collapse: collapse; }
+.answer th, .answer td { border: 1px solid var(--border); padding: 2px 8px; }
+.cost { font-size: 12px; }

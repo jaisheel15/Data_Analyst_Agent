@@ -1,0 +1,14 @@
+# Local: serve the built app and send /api to the Go service.
+:80 {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:8080 {
+			flush_interval -1 # stream SSE events immediately
+		}
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

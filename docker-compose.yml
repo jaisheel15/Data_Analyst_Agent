@@ -1,0 +1,90 @@
+# Local stack: `cp .env.example .env`, add an API key, then `docker compose up --build`.
+# Open http://localhost:3000.
+name: data-analyst-agent
+
+services:
+  web:
+    build: ./web
+    ports: ["127.0.0.1:3000:80"]
+    depends_on: [api]
+    networks: [edge]
+
+  api:
+    build: ./api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://daa:${POSTGRES_PASSWORD:-daa}@postgres:5432/daa?sslmode=disable
+      DATA_DIR: /data
+      # Sandboxes are siblings created by the Docker daemon, which needs host paths.
+      HOST_DATA_DIR: ${PWD}/data
+      AGENT_URL: http://agent:8000
+      PRICING_FILE: /config/pricing.yaml
+      SANDBOX_IMAGE: daa-sandbox:latest
+      DOCKER_HOST: tcp://docker-proxy:2375
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ${PWD}/data:/data
+      - ./config:/config:ro
+    ports: ["127.0.0.1:8080:8080"] # for `npm run dev`; the agent port is never published
+    depends_on:
+      postgres: { condition: service_healthy }
+      docker-proxy: { condition: service_started }
+      agent: { condition: service_started }
+      sandbox-image: { condition: service_completed_successfully }
+    networks: [edge, backend, db, dockerapi]
+
+  agent:
+    build: ./agent
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      GO_INTERNAL_URL: http://api:8081
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    networks: [backend] # needs internet egress to reach the model provider
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: daa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daa}
+      POSTGRES_DB: daa
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U daa"]
+      interval: 2s
+      retries: 30
+    networks: [db]
+
+  # Go never sees the raw Docker socket: only container, exec and info endpoints pass.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      INFO: 1
+      POST: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 0
+      IMAGES: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      BUILD: 0
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: [dockerapi]
+
+  # Builds the sandbox image that the API starts per session, then exits.
+  sandbox-image:
+    build: ./sandbox
+    image: daa-sandbox:latest
+    entrypoint: ["true"]
+    network_mode: none
+
+networks:
+  edge: {}
+  backend: {}
+  db: { internal: true }
+  dockerapi: { internal: true }
+
+volumes:
+  pgdata: {}

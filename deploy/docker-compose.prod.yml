@@ -1,0 +1,29 @@
+# Deploy-ready, not deployed (v1 runs locally). On a VM with Docker and a domain:
+#   DOMAIN=analyst.example.dev docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build
+services:
+  web:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN to your domain name}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    restart: unless-stopped
+
+  api:
+    ports: !reset []
+    restart: unless-stopped
+
+  agent:
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+
+  docker-proxy:
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}

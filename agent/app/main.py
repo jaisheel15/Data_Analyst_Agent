@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.graph import build_graph
-from app.llm import make_llm
+from app.llm import MissingAPIKey, make_llm
 from app.prompts import build_messages
 from app.schemas import RunRequest, Usage
 from app.tools import ToolClient
@@ -55,6 +55,10 @@ def create_app(settings: Settings | None = None, llm_factory: LLMFactory = make_
         check_token(x_internal_token)
         try:
             llm = llm_factory(req.model.provider, req.model.name, req.limits.max_tokens)
+        except MissingAPIKey as exc:
+            # A setup problem the user can fix: report it in-stream so the UI shows it.
+            return StreamingResponse(iter([_line({"type": "error", "error": str(exc)})]),
+                                     media_type="application/x-ndjson")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         tools = ToolClient(settings.go_internal_url, settings.internal_token, req.run_id, req.session_id,

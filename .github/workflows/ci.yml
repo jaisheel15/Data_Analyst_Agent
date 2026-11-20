@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+      - name: Build sandbox image (for sandbox security tests)
+        run: docker build -q -t daa-sandbox:dev sandbox
+      - name: Vet
+        working-directory: api
+        run: go vet ./...
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: api
+      - name: Test (Postgres via testcontainers, sandbox via runc)
+        working-directory: api
+        run: go test -race -count=1 -timeout 300s ./...
+
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: agent
+        run: uv sync --frozen --python 3.12
+      - working-directory: agent
+        run: uv run ruff check .
+      - working-directory: agent
+        run: uv run pytest -q
+
+  sandbox-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: sandbox
+        run: uv sync --frozen --python 3.12 && uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci --no-audit --no-fund
+      - working-directory: web
+        run: npx nuxt typecheck
+      - working-directory: web
+        run: npm run build
+
+  deploy-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: make check-deploy

@@ -106,3 +106,21 @@ async def test_deepseek_gets_a_plain_system_prompt(make_client):
     async with make_client(llm) as client:
         await stream_run(client, run_request(model={"provider": "deepseek", "name": "deepseek-flash"}))
     assert isinstance(llm.calls[0]["messages"][0].content, str)
+
+
+async def test_missing_api_key_streams_an_error_event_naming_the_variable(go):
+    import httpx
+    from conftest import TOKEN
+
+    from app.llm import MissingAPIKey
+    from app.main import Settings, create_app
+
+    def no_key(provider, model, max_tokens):
+        raise MissingAPIKey("ANTHROPIC_API_KEY is not set")
+
+    app = create_app(Settings(internal_token=TOKEN, go_internal_url="http://go"), llm_factory=no_key,
+                     tool_transport=httpx.MockTransport(go.handler))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://agent") as client:
+        status, events = await stream_run(client, run_request())
+    assert status == 200
+    assert types(events) == ["error"] and "ANTHROPIC_API_KEY" in events[0]["error"]
