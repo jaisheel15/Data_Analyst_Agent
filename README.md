@@ -52,11 +52,11 @@ Agent-written code runs in a container per session, created by Go through a Dock
 
 - no network, 1 CPU, 1 GB memory (no swap), a PID limit, and a 30-second timeout per call that kills the whole process group
 - read-only root filesystem, non-root user, all capabilities dropped, `no-new-privileges`
-- the session's DuckDB file mounted read-only; writable `/out` (charts) and `/scratch` (intermediate results)
+- the session's DuckDB file mounted read-only; writable `/out` (charts) and `/scratch` (intermediate results). Go accepts only regular PNG files from `/out`, so agent code can't plant a symlink to a secret file and have it served as a "chart"
 - an explicit environment allowlist, so no secrets reach agent code
 - runs under **gVisor** (`runsc`) when installed, otherwise falls back to `runc` with a warning
 
-Each call is a fresh process, so a crash, timeout, or fork bomb can't leave state behind. If code hangs, the container is thrown away and recreated. These behaviours are covered by integration tests against real Docker (`api/internal/sandbox/manager_test.go`).
+Each call is a fresh process, so a crash, timeout, or fork bomb can't leave state behind: leftover processes are killed after every call, and a tiny PID 1 reaper stops zombies from piling up. If code hangs, the container is thrown away and recreated. At most 3 sandboxes run at once; when all slots are taken, the least recently used idle one is evicted, and a new session is only turned away when all 3 are running code at that moment. These behaviours are covered by integration tests against real Docker (`api/internal/sandbox/manager_test.go`).
 
 **Honest limits:** the socket proxy restricts which Docker endpoints Go can reach, but "create container" is still a powerful permission, so a compromised API process remains serious. gVisor is what stops a container escape. On Linux, the host can reach containers on a bridge network by IP. The agent service publishes no port, and every internal call needs a shared token.
 

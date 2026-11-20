@@ -121,7 +121,7 @@ Postgres ◀── Go only        File storage (uploads, session.duckdb, charts)
 Plain HTTP + JSON on an internal-only Docker network. A shared secret header (`X-Internal-Token`) on every call.
 
 **Go → Python: `POST /runs`.** Body: `run_id`, `session_id`, `question`, `schema` (tables, columns, sample rows), `history` (§7.3), `limits` (step budget, max tokens). The response is **streamed NDJSON**, one event per line:
-`step_start`, `tool_call` (tool, input), `tool_result` (summary, error, chart_ids), `answer_delta`, `done` (final answer, usage: provider, model, input/output/cached tokens, steps), `error`.
+`step_start`, `tool_call` (tool, input), `tool_result` (summary, error, chart_ids), `answer_delta`, `usage` (running totals after every model call, so Go can charge spend even if the stream is cut), `done` (final answer, usage: provider, model, input/output/cached tokens, steps), `error`. *(The `usage` event was added during implementation, after review found that closing the tab skipped the spend cap.)*
 
 **Python → Go: `POST /internal/tools/{describe_dataset|run_sql|run_python}`.** Body: `run_id`, `session_id`, and the tool input. Response: the tool output (already truncated for the LLM), `error` text if it failed, and `chart_ids`. Go records each call in `tool_calls` as it happens.
 
@@ -169,7 +169,7 @@ The contract is defined in one place (`contracts/`, OpenAPI or JSON schema). Bot
 - `GET /sessions/{id}` returns datasets and message history.
 - `POST /sessions/{id}/messages` returns an **SSE stream**. Go builds the history, calls Python `/runs`, persists each event, and relays it to the browser.
   - It returns **409** if this session already has a run in progress.
-  - It returns **503** if 3 sandboxes are already active.
+  - It returns **503** only if all 3 sandboxes are running code at that moment. An idle sandbox is evicted (least recently used first) to make room. *(Changed during implementation: holding idle sandboxes for 15 minutes turned new users away for no reason.)*
   - It returns **429** with a clear message once the daily spend cap is reached.
 - `GET /charts/{id}`, `GET /health` (which also pings the agent service).
 
