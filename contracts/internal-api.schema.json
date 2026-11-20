@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data-analyst-agent.local/contracts/internal-api.schema.json",
+  "title": "Internal API between the Go service and the Python agent service",
+  "description": "Go -> Python: POST /runs with RunRequest; the response streams Event objects as NDJSON. Python -> Go: POST /internal/tools/{name} with ToolRequest; the response is ToolResponse. Both carry the X-Internal-Token header.",
+  "$defs": {
+    "RunRequest": {
+      "type": "object",
+      "required": ["run_id", "session_id", "question", "model", "schema", "history", "limits"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "session_id": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1},
+        "model": {
+          "type": "object",
+          "required": ["provider", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {"enum": ["anthropic", "deepseek"]},
+            "name": {"type": "string", "minLength": 1}
+          }
+        },
+        "schema": {"type": "array", "items": {"$ref": "#/$defs/Table"}},
+        "history": {"type": "array", "items": {"$ref": "#/$defs/Turn"}},
+        "limits": {
+          "type": "object",
+          "required": ["max_steps", "max_tokens"],
+          "additionalProperties": false,
+          "properties": {
+            "max_steps": {"type": "integer", "minimum": 1},
+            "max_tokens": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "Table": {
+      "type": "object",
+      "required": ["name", "rows", "columns", "sample_rows"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "rows": {"type": "integer", "minimum": 0},
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "additionalProperties": false,
+            "properties": {"name": {"type": "string"}, "type": {"type": "string"}}
+          }
+        },
+        "sample_rows": {"type": "array", "items": {"type": "array"}}
+      }
+    },
+    "Turn": {
+      "type": "object",
+      "required": ["question", "answer", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "question": {"type": "string"},
+        "answer": {"type": "string"},
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["tool", "input", "output"],
+            "additionalProperties": false,
+            "properties": {
+              "tool": {"$ref": "#/$defs/ToolName"},
+              "input": {"type": "object"},
+              "output": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "ToolName": {"enum": ["describe_dataset", "run_sql", "run_python"]},
+    "Usage": {
+      "type": "object",
+      "required": ["provider", "model", "input_tokens", "output_tokens", "cached_tokens", "cache_write_tokens", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {"type": "string"},
+        "model": {"type": "string"},
+        "input_tokens": {"type": "integer", "minimum": 0, "description": "uncached input tokens only"},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "cached_tokens": {"type": "integer", "minimum": 0, "description": "cache reads"},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "steps": {"type": "integer", "minimum": 0}
+      }
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "step"],
+          "properties": {"type": {"const": "step_start"}, "step": {"type": "integer", "minimum": 1}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "step", "tool", "input"],
+          "properties": {
+            "type": {"const": "tool_call"}, "step": {"type": "integer", "minimum": 1},
+            "tool": {"$ref": "#/$defs/ToolName"}, "input": {"type": "object"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "step", "tool", "summary", "error", "chart_ids"],
+          "properties": {
+            "type": {"const": "tool_result"}, "step": {"type": "integer", "minimum": 1},
+            "tool": {"$ref": "#/$defs/ToolName"}, "summary": {"type": "string"}, "error": {"type": "string"},
+            "chart_ids": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "text"],
+          "properties": {"type": {"const": "answer_delta"}, "text": {"type": "string"}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "answer", "status", "usage"],
+          "properties": {
+            "type": {"const": "done"}, "answer": {"type": "string"},
+            "status": {"enum": ["done", "budget_exhausted"]}, "usage": {"$ref": "#/$defs/Usage"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "error"],
+          "properties": {"type": {"const": "error"}, "error": {"type": "string"}, "usage": {"$ref": "#/$defs/Usage"}}
+        }
+      ]
+    },
+    "ToolRequest": {
+      "type": "object",
+      "required": ["run_id", "session_id", "input"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "input": {"type": "object"}
+      }
+    },
+    "ToolResponse": {
+      "type": "object",
+      "required": ["output", "chart_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "output": {"type": "string"},
+        "error": {"type": "string"},
+        "chart_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

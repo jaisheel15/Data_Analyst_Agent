@@ -56,6 +56,7 @@ func (f *fakeSandbox) Stop(context.Context, string) error { return nil }
 type fakeAgent struct {
 	mu   sync.Mutex
 	reqs []contract.RunRequest
+	raw  [][]byte // request bodies exactly as Go sent them
 	run  func(ctx context.Context, req contract.RunRequest, emit func(contract.Event))
 	srv  *httptest.Server
 }
@@ -67,13 +68,15 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 			http.Error(w, "bad token", http.StatusUnauthorized)
 			return
 		}
+		raw, _ := io.ReadAll(r.Body)
 		var req contract.RunRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(raw, &req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		f.mu.Lock()
 		f.reqs = append(f.reqs, req)
+		f.raw = append(f.raw, raw)
 		run := f.run
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-ndjson")
