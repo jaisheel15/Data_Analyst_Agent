@@ -11,9 +11,16 @@ type RunRequest struct {
 	RunID     string  `json:"run_id"`
 	SessionID string  `json:"session_id"`
 	Question  string  `json:"question"`
+	Model     Model   `json:"model"`
 	Schema    []Table `json:"schema"`
 	History   []Turn  `json:"history"`
 	Limits    Limits  `json:"limits"`
+}
+
+// Model is chosen by Go so pricing is checked before a run starts.
+type Model struct {
+	Provider string `json:"provider"` // "anthropic" or "deepseek"
+	Name     string `json:"name"`
 }
 
 type Table struct {
