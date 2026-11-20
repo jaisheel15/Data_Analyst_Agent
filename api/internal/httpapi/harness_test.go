@@ -16,10 +16,14 @@ import (
 
 	"dataanalyst/api/internal/contract"
 	"dataanalyst/api/internal/cost"
+	"dataanalyst/api/internal/db"
 	"dataanalyst/api/internal/httpapi"
 	"dataanalyst/api/internal/sandbox"
 	"dataanalyst/api/internal/storage"
 	"dataanalyst/api/internal/testenv"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const internalToken = "test-internal-token"
@@ -75,6 +79,7 @@ func (f *fakeAgent) lastRequest(t *testing.T) contract.RunRequest {
 
 type harness struct {
 	t        *testing.T
+	pool     *pgxpool.Pool
 	srv      *httpapi.Server
 	public   *httptest.Server
 	internal *httptest.Server
@@ -88,7 +93,7 @@ func newHarness(t *testing.T, tweak func(*httpapi.Config)) *harness {
 	t.Helper()
 	pool := testenv.Postgres(t)
 	layout := storage.Layout{Root: t.TempDir()}
-	h := &harness{t: t, layout: layout, sandbox: &fakeSandbox{}, agent: &fakeAgent{},
+	h := &harness{t: t, pool: pool, layout: layout, sandbox: &fakeSandbox{}, agent: &fakeAgent{},
 		now: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)}
 	cfg := httpapi.Config{
 		InternalToken:      internalToken,
@@ -210,3 +215,23 @@ func fileExists(path string) bool {
 }
 
 var _ = filepath.Join
+
+// startRun puts a running run in place, as the chat endpoint would. Setup only:
+// tests observe results through the HTTP APIs, never by reading the database.
+func (h *harness) startRun(sessionID string) string {
+	h.t.Helper()
+	q := db.New(h.pool)
+	ctx := context.Background()
+	sid := uuid.MustParse(sessionID)
+	msg, err := q.CreateMessage(ctx, db.CreateMessageParams{
+		ID: uuid.New(), SessionID: sid, Role: "user", Content: "question"})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	run, err := q.CreateRun(ctx, db.CreateRunParams{ID: uuid.New(), SessionID: sid,
+		MessageID: msg.ID, Purpose: "chat", Provider: "anthropic", Model: "test-model"})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return run.ID.String()
+}
