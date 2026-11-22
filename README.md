@@ -2,7 +2,10 @@
 
 Upload a CSV or Parquet file, ask a question in plain English, and watch an AI agent work it out. It inspects the data, writes and runs SQL and Python in a locked-down sandbox, fixes its own errors, draws charts, and explains the answer.
 
-> **Demo video and GIF:** coming in milestone 2.
+![Demo: asking why West revenue dropped, then for a chart](docs/demo.gif)
+
+[Full-quality demo video](docs/demo.mp4) (40 s, two questions on the sample retail data, played at 2x).
+
 > **Eval score:** 29/30 on `deepseek-flash` at about $0.002 per question (see [Evals](#evals)).
 
 ## Run it
@@ -93,6 +96,7 @@ cd web && npm run dev   # UI on :3000 against the Go API on :8080 (from `docker 
 | `config/pricing.yaml` | Per-model prices used for the spend cap |
 | `deploy/` | Production compose override and Caddyfile (deploy-ready; v1 runs locally) |
 | `docs/specs/` | Design doc |
+| `scripts/record-demo.mjs` | Re-records the demo GIF and video against a running stack |
 
 ## Data and privacy
 
