@@ -3,7 +3,7 @@
 Upload a CSV or Parquet file, ask a question in plain English, and watch an AI agent work it out. It inspects the data, writes and runs SQL and Python in a locked-down sandbox, fixes its own errors, draws charts, and explains the answer.
 
 > **Demo video and GIF:** coming in milestone 2.
-> **Eval results (Claude vs DeepSeek):** coming in milestone 3.
+> **Eval score:** 29/30 on `deepseek-flash` at about $0.002 per question (see [Evals](#evals)).
 
 ## Run it
 
@@ -11,13 +11,13 @@ You need Docker. On Linux, gVisor is optional but recommended (see [Sandbox](#sa
 
 ```bash
 git clone <this repo> && cd data-analyst-agent
-cp .env.example .env          # then set ANTHROPIC_API_KEY (or DEEPSEEK_API_KEY + LLM_PROVIDER=deepseek)
+cp .env.example .env          # then set DEEPSEEK_API_KEY (or ANTHROPIC_API_KEY + LLM_PROVIDER=anthropic)
 docker compose up --build     # or: make up
 ```
 
 Open <http://localhost:3000>, click **Retail sales**, and ask *"Why did West revenue drop in Q3 2025?"*
 
-The defaults keep spending low: a cheap model (`claude-haiku-5-5`), and a **$0.50/day** chat cap that the Go API enforces from real token counts. Change both in `.env`.
+The defaults keep spending low: a cheap model (`deepseek-flash`), and a **$0.50/day** chat cap that the Go API enforces from real token counts. Change both in `.env`.
 
 ## Architecture
 
@@ -68,7 +68,11 @@ Each call is a fresh process, so a crash, timeout, or fork bomb can't leave stat
 make eval PROVIDER=deepseek MODEL=deepseek-flash      # needs the stack running
 ```
 
-Each question runs in a fresh session through the real API, so the whole pipeline is measured. The run prints an estimated cost first and stops if it reaches `EVAL_RUN_BUDGET_USD`. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
+Each question runs in a fresh session through the real API, so the whole pipeline is measured. The run prints an estimated cost first and stops if it reaches `EVAL_RUN_BUDGET_USD`. | Model | Accuracy | Numbers / names / lists | Open-ended | Cost per question | Latency p50 / p95 |
+|---|---|---|---|---|---|
+| `deepseek-flash` | 29/30 (97%) | 21/21 | 8/9 | $0.002 | 11 s / 34 s |
+
+The open-ended answers are graded by the same model, which is a limit of this score. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
 
 ## Development
 
