@@ -116,6 +116,11 @@
           "properties": {"type": {"const": "answer_delta"}, "text": {"type": "string"}}
         },
         {
+          "type": "object", "additionalProperties": false, "required": ["type"],
+          "description": "The answer text streamed so far was only a preamble to a tool call; discard it.",
+          "properties": {"type": {"const": "answer_reset"}}
+        },
+        {
           "type": "object", "additionalProperties": false, "required": ["type", "answer", "status", "usage"],
           "properties": {
             "type": {"const": "done"}, "answer": {"type": "string"},

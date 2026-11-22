@@ -40,7 +40,20 @@ services:
       GO_INTERNAL_URL: http://api:8081
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT:-} # empty = tracing off; `make up-tracing` sets it
     networks: [backend] # needs internet egress to reach the model provider
+
+  # Optional trace viewer (`make up-tracing`): http://localhost:6006. Traces include prompts and
+  # sample rows and stay in this local volume.
+  phoenix:
+    image: arizephoenix/phoenix:version-22.0.1
+    profiles: [tracing]
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_ENABLE_AUTH: "false" # local, bound to 127.0.0.1 only
+    volumes: [phoenix:/mnt/data]
+    ports: ["127.0.0.1:6006:6006"]
+    networks: [backend]
 
   postgres:
     image: postgres:17-alpine
@@ -88,3 +101,4 @@ networks:
 
 volumes:
   pgdata: {}
+  phoenix: {}

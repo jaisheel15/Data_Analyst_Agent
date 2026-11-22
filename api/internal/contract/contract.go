@@ -59,6 +59,7 @@ const (
 	EventToolCall    = "tool_call"
 	EventToolResult  = "tool_result"
 	EventAnswerDelta = "answer_delta"
+	EventAnswerReset = "answer_reset" // text sent so far was only a preamble to a tool call; discard it
 	EventUsage       = "usage" // running totals after each model call; not sent to browsers
 	EventDone        = "done"
 	EventError       = "error"

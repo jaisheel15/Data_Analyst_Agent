@@ -206,6 +206,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, run db.AgentRun,
 			}
 		case contract.EventAnswerDelta:
 			send(ev.Type, map[string]string{"text": ev.Text})
+		case contract.EventAnswerReset:
+			send(ev.Type, map[string]string{})
 		case contract.EventDone:
 			finished = true
 			status := "done"

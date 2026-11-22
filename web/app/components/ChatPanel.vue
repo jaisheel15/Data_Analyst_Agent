@@ -13,6 +13,14 @@ async function submit() {
   await done
 }
 
+// Follow the answer as it streams in, unless the reader has scrolled up.
+watch(turns, async () => {
+  const el = log.value
+  if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > 120) return
+  await nextTick()
+  el.scrollTop = el.scrollHeight
+}, { deep: true })
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()

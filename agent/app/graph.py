@@ -43,10 +43,29 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
     # on the last call; tool_choice="none" stops further calls.
     no_more_tools = llm.bind_tools(TOOLS, tool_choice="none")
 
+    async def stream_reply(model, messages) -> tuple[AIMessage, bool]:
+        """Call the model, sending its text to the user as it arrives.
+
+        Returns the full reply and whether any text was sent. If the reply turns
+        out to contain tool calls, that text was only a preamble ("Let me check
+        the data"), so it is withdrawn with answer_reset.
+        """
+        write = get_stream_writer()
+        reply, sent = None, False
+        async for chunk in model.astream(messages):
+            reply = chunk if reply is None else reply + chunk
+            piece = text_of(chunk)
+            if piece:
+                write({"type": "answer_delta", "text": piece})
+                sent = True
+        if reply is None:
+            raise RuntimeError("the model returned an empty response")
+        if reply.tool_calls and sent:
+            write({"type": "answer_reset"})
+        return reply, sent
+
     def finish(message: AIMessage, status: str) -> dict:
-        answer = text_of(message).strip()
-        get_stream_writer()({"type": "answer_delta", "text": answer})
-        return {"messages": [message], "answer": answer, "status": status}
+        return {"messages": [message], "answer": text_of(message).strip(), "status": status}
 
     def record(reply: AIMessage) -> None:
         # Report the running total after every model call, so Go can charge
@@ -55,7 +74,7 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
         get_stream_writer()({"type": "usage", "usage": usage.model_dump()})
 
     async def agent(state: RunState) -> dict:
-        reply = await with_tools.ainvoke(state["messages"])
+        reply, _ = await stream_reply(with_tools, state["messages"])
         record(reply)
         if reply.tool_calls:
             return {"messages": [reply]}
@@ -82,7 +101,7 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
 
     async def wrap_up(state: RunState) -> dict:
         nudge = HumanMessage(WRAP_UP.format(max_steps=max_steps))
-        reply = await no_more_tools.ainvoke([*state["messages"], nudge])
+        reply, _ = await stream_reply(no_more_tools, [*state["messages"], nudge])
         record(reply)
         return finish(reply, "budget_exhausted") | {"messages": [nudge, reply]}
 

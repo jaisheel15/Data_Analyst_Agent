@@ -152,6 +152,9 @@ function applyEvent(turn: Turn, type: string, data: any) {
     case 'answer_delta':
       turn.answer += data.text
       break
+    case 'answer_reset':
+      turn.answer = ''
+      break
     case 'done':
       turn.answer = data.answer
       turn.status = data.status

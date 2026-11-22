@@ -7,9 +7,9 @@ async def test_direct_answer_streams_the_answer_then_done_with_usage(make_client
         status, events = await stream_run(client, run_request())
     events = [e for e in events if e["type"] != "usage"]
     assert status == 200
-    assert types(events) == ["answer_delta", "done"]
-    assert events[0]["text"] == "The total is 35."
-    done = events[1]
+    assert set(types(events)) == {"answer_delta", "done"} and types(events)[-1] == "done"
+    assert "".join(e["text"] for e in events if e["type"] == "answer_delta").strip() == "The total is 35."
+    done = events[-1]
     assert done["answer"] == "The total is 35."
     assert done["status"] == "done"
     # input_tokens excludes cache reads and writes, as the contract says.
@@ -25,7 +25,7 @@ async def test_tool_loop_streams_each_step_and_feeds_results_back(make_client, g
     async with make_client(llm) as client:
         _, events = await stream_run(client, run_request())
     events = [e for e in events if e["type"] != "usage"]
-    assert types(events) == ["step_start", "tool_call", "tool_result", "answer_delta", "done"]
+    assert types(events)[:3] == ["step_start", "tool_call", "tool_result"] and types(events)[-1] == "done"
     assert events[1] == {"type": "tool_call", "step": 1, "tool": "run_sql",
                          "input": {"sql": "select sum(amount) from sales"}}
     assert events[2]["chart_ids"] == ["c9"] and events[2]["error"] == ""
@@ -138,3 +138,34 @@ async def test_running_usage_is_reported_after_every_model_call(make_client):
     first_usage = next(i for i, e in enumerate(events) if e["type"] == "usage")
     first_tool = next(i for i, e in enumerate(events) if e["type"] == "tool_call")
     assert first_usage < first_tool  # reported before the tools run, not only at the end
+
+
+async def test_answer_streams_in_pieces_before_the_run_finishes(make_client):
+    llm = FakeLLM(script=[ai("Revenue grew 12 percent in the West region.")])
+    async with make_client(llm) as client:
+        _, events = await stream_run(client, run_request())
+    deltas = [e["text"] for e in events if e["type"] == "answer_delta"]
+    assert len(deltas) > 3  # word by word, not one chunk
+    assert "".join(deltas) == "Revenue grew 12 percent in the West region."
+    assert max(i for i, e in enumerate(events) if e["type"] == "answer_delta") < next(
+        i for i, e in enumerate(events) if e["type"] == "done")
+
+
+async def test_text_before_a_tool_call_is_withdrawn_so_it_is_not_shown_as_the_answer(make_client):
+    llm = FakeLLM(script=[ai("Let me check the data.", tool_calls=[tool("run_sql", sql="select 1")]),
+                          ai("The answer is 1.")])
+    async with make_client(llm) as client:
+        _, events = await stream_run(client, run_request())
+    kinds = types([e for e in events if e["type"] != "usage"])
+    assert "answer_reset" in kinds
+    # the withdrawn preamble comes first, then the reset, then the tool runs, then the real answer
+    reset = kinds.index("answer_reset")
+    assert kinds.index("answer_delta") < reset < kinds.index("tool_call") < len(kinds) - 2
+    assert events[-1]["answer"] == "The answer is 1."
+
+
+async def test_a_tool_call_with_no_text_needs_no_reset(make_client):
+    llm = FakeLLM(script=[ai(tool_calls=[tool("run_sql", sql="select 1")]), ai("One.")])
+    async with make_client(llm) as client:
+        _, events = await stream_run(client, run_request())
+    assert "answer_reset" not in types(events)

@@ -23,6 +23,7 @@ from app.llm import MissingAPIKey, make_llm
 from app.prompts import build_messages
 from app.schemas import RunRequest, Usage
 from app.tools import ToolClient
+from app.tracing import setup_tracing
 
 log = logging.getLogger("agent")
 
@@ -33,6 +34,8 @@ LLMFactory = Callable[[str, str, int], BaseChatModel]
 class Settings:
     internal_token: str = field(default_factory=lambda: os.environ.get("INTERNAL_TOKEN", ""))
     go_internal_url: str = field(default_factory=lambda: os.environ.get("GO_INTERNAL_URL", "http://api:8081"))
+    # Where to send traces (OTLP/HTTP). Empty turns tracing off.
+    otlp_endpoint: str = field(default_factory=lambda: os.environ.get("TRACING_OTLP_ENDPOINT", ""))
 
 
 def create_app(settings: Settings | None = None, llm_factory: LLMFactory = make_llm,
@@ -75,7 +78,12 @@ async def _events(req: RunRequest, llm: BaseChatModel, tools: ToolClient) -> Asy
     final: dict = {}
     try:
         async for mode, chunk in graph.astream(state, stream_mode=["custom", "values"],
-                                               config={"recursion_limit": 4 * req.limits.max_steps + 10}):
+                                               config={"recursion_limit": 4 * req.limits.max_steps + 10,
+                                                       "run_name": "analyst-run",
+                                                       # shows up on every span, so a trace can be matched to Go's run row
+                                                       "metadata": {"session_id": req.session_id, "run_id": req.run_id,
+                                                                    "provider": req.model.provider,
+                                                                    "model": req.model.name}}):
             if mode == "custom":
                 yield _line(chunk)
             else:
@@ -96,4 +104,7 @@ def _line(event: dict) -> str:
 
 def app_from_env() -> FastAPI:  # uvicorn --factory app.main:app_from_env
     logging.basicConfig(level=logging.INFO)
-    return create_app()
+    settings = Settings()
+    if setup_tracing(settings.otlp_endpoint):
+        log.info("tracing on: sending spans to %s", settings.otlp_endpoint)
+    return create_app(settings)

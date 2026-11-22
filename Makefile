@@ -1,4 +1,4 @@
-.PHONY: setup up down logs test test-go test-agent test-sandbox lint typecheck sandbox-image samples check-deploy eval eval-truth eval-test
+.PHONY: setup up up-tracing down logs test test-go test-agent test-sandbox lint typecheck sandbox-image samples check-deploy eval eval-truth eval-test
 
 setup: ## first-time setup: .env and data dir
 	@test -f .env || (cp .env.example .env && echo "created .env: add your API key")
@@ -7,6 +7,10 @@ setup: ## first-time setup: .env and data dir
 up: setup ## build and start everything on http://localhost:3000
 	docker compose up -d --build
 	@echo "open http://localhost:3000"
+
+up-tracing: setup ## same as up, plus the Phoenix trace viewer on http://localhost:6006
+	TRACING_OTLP_ENDPOINT=http://phoenix:6006/v1/traces docker compose --profile tracing up -d --build
+	@echo "app: http://localhost:3000   traces: http://localhost:6006"
 
 down:
 	docker compose down

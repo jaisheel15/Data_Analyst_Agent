@@ -44,7 +44,7 @@ flowchart LR
 1. The browser posts the question. Go checks the daily budget, whether a sandbox is free, and the model's price. Postgres's partial unique index allows one running run per session.
 2. Go sends Python the question, the table schemas with sample rows, the last few turns of history (with compact tool steps), the model and the limits.
 3. LangGraph loops: the model calls `describe_dataset`, `run_sql` or `run_python`; Python forwards each call to Go; Go runs it in the session's sandbox and returns text the model can read. Errors come back as results, so the agent can fix its code and retry.
-4. Every step streams back as NDJSON from Python to Go, then as SSE from Go to the browser. Go saves each tool call, keeps the charts, and computes cost from the token counts.
+4. Every step streams back as NDJSON from Python to Go, then as SSE from Go to the browser, and the answer arrives token by token as the model writes it. If a model writes a sentence like "Let me check" before calling a tool, that text is withdrawn (`answer_reset`) so it never shows up as the answer. Go saves each tool call, keeps the charts, and computes cost from the token counts.
 5. A tool-call budget (10 by default) stops runaway loops. When it runs out, the agent must answer with what it has and say so.
 
 The Go⇄Python API is defined once in [`contracts/internal-api.schema.json`](contracts/internal-api.schema.json), and both services' tests validate their payloads against it.
@@ -76,6 +76,12 @@ Each question runs in a fresh session through the real API, so the whole pipelin
 | `deepseek-flash` | 29/30 (97%) | 21/21 | 8/9 | $0.002 | 11 s / 34 s |
 
 The open-ended answers are graded by the same model, which is a limit of this score. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
+
+## Tracing
+
+Off by default. `make up-tracing` also starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at <http://localhost:6006>, and every run shows up as a trace: each model call with its prompt, tokens (including cached ones) and latency, and each graph step. Spans carry the same `run_id` and `session_id` as the Postgres rows, so a slow or wrong answer can be matched to its trace. It uses OpenTelemetry (OpenInference's LangChain instrumentation), so any OTLP backend works: set `TRACING_OTLP_ENDPOINT` instead.
+
+Traces contain prompts and sample rows. Phoenix runs locally with its data in a Docker volume, bound to 127.0.0.1.
 
 ## Development
 

@@ -217,6 +217,21 @@ func TestDailyBudgetStopsChatButNotEvals(t *testing.T) {
 	}
 }
 
+func TestWithdrawnPreambleIsRelayedSoTheBrowserCanClearIt(t *testing.T) {
+	h := newHarness(t, nil)
+	sid := h.newSession()
+	h.agent.setRun(func(_ context.Context, req contract.RunRequest, emit func(contract.Event)) {
+		emit(contract.Event{Type: contract.EventAnswerDelta, Text: "Let me look. "})
+		emit(contract.Event{Type: contract.EventAnswerReset})
+		emit(contract.Event{Type: contract.EventAnswerDelta, Text: "Done."})
+		emit(doneEvent("Done."))
+	})
+	_, events := h.ask(sid, "q")
+	if got := types(events); got != "answer_delta,answer_reset,answer_delta,done" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
 func TestEvalRunsDoNotCountTowardsTheChatBudget(t *testing.T) {
 	h := newHarness(t, func(c *httpapi.Config) { c.DailyChatBudgetUSD = 0.20 })
 	sid := h.newSession()
