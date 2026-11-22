@@ -140,7 +140,7 @@ func newHarness(t *testing.T, tweak func(*httpapi.Config)) *harness {
 	pool := testenv.Postgres(t)
 	layout := storage.Layout{Root: t.TempDir()}
 	h := &harness{t: t, pool: pool, layout: layout, sandbox: &fakeSandbox{}, agent: newFakeAgent(t),
-		now: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)}
+		now: todayAtNoonUTC()}
 	cfg := httpapi.Config{
 		InternalToken:      internalToken,
 		EvalToken:          "test-eval-token",
@@ -280,4 +280,12 @@ func (h *harness) startRun(sessionID string) string {
 		h.t.Fatal(err)
 	}
 	return run.ID.String()
+}
+
+// todayAtNoonUTC is the fake clock's start. Runs are stamped by Postgres with the
+// real time, so the fake clock has to start on the real UTC day or the budget
+// tests would depend on the date they happen to run on.
+func todayAtNoonUTC() time.Time {
+	y, m, d := time.Now().UTC().Date()
+	return time.Date(y, m, d, 12, 0, 0, 0, time.UTC)
 }

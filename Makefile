@@ -29,7 +29,7 @@ test-sandbox:
 	cd sandbox && uv run pytest -q
 
 lint:
-	cd api && go vet ./... && (command -v golangci-lint >/dev/null && golangci-lint run || echo "golangci-lint not installed, skipped")
+	cd api && go vet ./... && (command -v golangci-lint >/dev/null && golangci-lint run || echo "golangci-lint not installed, skipped (go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0)")
 	cd agent && uv run ruff check .
 
 typecheck:

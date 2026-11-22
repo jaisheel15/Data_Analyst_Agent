@@ -31,7 +31,7 @@ func newFixture(t *testing.T, tweak func(*sandbox.Config)) fixture {
 	if testing.Short() {
 		t.Skip("docker test")
 	}
-	cli, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Skipf("docker client: %v", err)
 	}

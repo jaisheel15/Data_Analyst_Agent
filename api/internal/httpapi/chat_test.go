@@ -43,7 +43,8 @@ func (h *harness) askCtx(ctx context.Context, sid, question string, headers ...s
 		if ctx.Err() != nil {
 			return nil, nil
 		}
-		h.t.Fatal(err)
+		h.t.Error(err) // not Fatal: this also runs in goroutines
+		return nil, nil
 	}
 	defer resp.Body.Close()
 	var events []sse

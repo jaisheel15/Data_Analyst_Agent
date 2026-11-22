@@ -1,0 +1,8 @@
+version: "2"
+linters:
+  exclusions:
+    rules:
+      # Ignoring the error from a deferred Close/Rollback, or from writing to an
+      # HTTP response whose client may have gone away, is the normal Go idiom.
+      - linters: [errcheck]
+        text: "Error return value of .*(Close|Rollback|Write|Fprintf|Remove).* is not checked"

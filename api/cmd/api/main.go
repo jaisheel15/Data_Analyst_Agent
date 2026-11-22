@@ -61,7 +61,7 @@ func run() error {
 	}
 
 	layout := storage.Layout{Root: env("DATA_DIR", "/data")}
-	docker, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	docker, err := client.New(client.FromEnv)
 	if err != nil {
 		return err
 	}
