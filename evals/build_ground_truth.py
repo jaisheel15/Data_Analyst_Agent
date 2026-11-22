@@ -14,6 +14,7 @@ HERE = Path(__file__).resolve().parent
 
 def connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
+    con.execute("SET threads = 1")  # float sums and tie order must not depend on the machine
     for csv in sorted((HERE / "datasets").glob("*.csv")):
         con.execute(f'CREATE TABLE "{csv.stem}" AS SELECT * FROM read_csv_auto(?)', [str(csv)])
     return con

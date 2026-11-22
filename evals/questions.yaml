@@ -100,7 +100,7 @@ questions:
      rubric: "The answer must name the departments with the highest and lowest attrition correctly (using the facts), and must not claim a strong effect it did not measure."}
   - {id: n05, dataset: employees, kind: narrative,
      question: "Do remote employees get different performance ratings than office employees?",
-     facts_sql: "SELECT remote, round(avg(performance_rating), 2) AS avg_rating, count(*) AS people FROM employees GROUP BY remote",
+     facts_sql: "SELECT remote, round(avg(performance_rating), 2) AS avg_rating, count(*) AS people FROM employees GROUP BY remote ORDER BY remote",
      rubric: "The answer must report both averages consistent with the facts and conclude that the difference is small or negligible if the facts show that."}
   - {id: n06, dataset: employees, kind: narrative, expects_chart: true,
      question: "Plot the salary distribution for each department and summarise what you see.",
