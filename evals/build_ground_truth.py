@@ -24,7 +24,9 @@ def rows(con, sql: str) -> list[list]:
 
 
 def _plain(v):
-    return v if isinstance(v, (int, float, str, bool)) or v is None else str(v)
+    if isinstance(v, float):
+        return round(v, 6)  # stable across DuckDB versions (the CI freshness check)
+    return v if isinstance(v, (int, str, bool)) or v is None else str(v)
 
 
 def build() -> dict:
@@ -39,7 +41,7 @@ def build() -> dict:
             truth[q["id"]] = {"values": [str(r[0]) for r in result]}
         elif q["kind"] == "number":
             assert len(result) == 1 and result[0][0] is not None, q["id"]
-            truth[q["id"]] = {"value": float(result[0][0])}
+            truth[q["id"]] = {"value": round(float(result[0][0]), 6)}
         else:
             assert len(result) == 1, q["id"]
             truth[q["id"]] = {"value": str(result[0][0])}
