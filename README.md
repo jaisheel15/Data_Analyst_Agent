@@ -60,6 +60,16 @@ Each call is a fresh process, so a crash, timeout, or fork bomb can't leave stat
 
 **Honest limits:** the socket proxy restricts which Docker endpoints Go can reach, but "create container" is still a powerful permission, so a compromised API process remains serious. gVisor is what stops a container escape. On Linux, the host can reach containers on a bridge network by IP. The agent service publishes no port, and every internal call needs a shared token.
 
+## Evals
+
+`evals/questions.yaml` holds 30 questions over 3 datasets (retail sales, employees, support tickets): 21 with a number, name or list as the answer, and 9 open-ended ones graded by an LLM judge. **No expected answer is typed by hand.** Every question carries the SQL that computes its truth from the data, and `make eval-truth` writes those to `evals/ground_truth.json` (CI checks the file is up to date).
+
+```bash
+make eval PROVIDER=deepseek MODEL=deepseek-flash      # needs the stack running
+```
+
+Each question runs in a fresh session through the real API, so the whole pipeline is measured. The run prints an estimated cost first and stops if it reaches `EVAL_RUN_BUDGET_USD`. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
+
 ## Development
 
 ```bash

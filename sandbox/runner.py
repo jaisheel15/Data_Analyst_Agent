@@ -14,7 +14,9 @@ import json
 import linecache
 import math
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 
 os.environ.setdefault("MPLBACKEND", "Agg")  # no display inside the sandbox
@@ -78,8 +80,40 @@ def _save_open_figures(out_dir: str) -> None:
     plt.close("all")
 
 
+def _stray_pngs(req: dict) -> dict[str, float]:
+    """PNGs the agent wrote outside /out (scratch, temp dir), with their mtimes."""
+    found = {}
+    for root in {req["scratch_dir"], tempfile.gettempdir()}:
+        for dirpath, _dirs, names in os.walk(root):
+            if os.path.abspath(dirpath).startswith(os.path.abspath(req["out_dir"])):
+                continue
+            for name in names:
+                if name.lower().endswith(".png"):
+                    path = os.path.join(dirpath, name)
+                    try:
+                        found[path] = os.stat(path).st_mtime_ns
+                    except OSError:
+                        pass
+    return found
+
+
+def _adopt_stray_pngs(req: dict, before: dict[str, float]) -> None:
+    """Copy charts saved outside /out into /out, so they reach the user."""
+    for path, mtime in _stray_pngs(req).items():
+        if before.get(path) == mtime:
+            continue
+        target = os.path.join(req["out_dir"], os.path.basename(path))
+        n = 1
+        while os.path.exists(target):
+            n += 1
+            stem, ext = os.path.splitext(os.path.basename(path))
+            target = os.path.join(req["out_dir"], f"{stem}_{n}{ext}")
+        shutil.copyfile(path, target)
+
+
 def run_python(req: dict) -> dict:
     before = _pngs(req["out_dir"])
+    stray_before = _stray_pngs(req)
     out = io.StringIO()
     err = io.StringIO()
     try:
@@ -95,6 +129,7 @@ def run_python(req: dict) -> dict:
         except BaseException as exc:  # noqa: BLE001 - report every failure to the agent
             error = _agent_traceback(exc)
     con.close()
+    _adopt_stray_pngs(req, stray_before)
     if not _pngs(req["out_dir"]) - before:
         # The agent drew but never called savefig: keep its figures anyway.
         _save_open_figures(req["out_dir"])

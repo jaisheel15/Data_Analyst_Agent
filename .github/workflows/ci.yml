@@ -37,6 +37,15 @@ jobs:
       - working-directory: agent
         run: uv run pytest -q
 
+  evals-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: evals
+        run: uv run --python 3.12 pytest -q
+      - run: uv run --project evals python evals/build_ground_truth.py >/dev/null && git diff --exit-code evals/ground_truth.json
+
   sandbox-runner:
     runs-on: ubuntu-latest
     steps:

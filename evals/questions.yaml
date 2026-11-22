@@ -1,0 +1,120 @@
+# Eval question set. Expected answers are NEVER typed here: every question has a
+# SQL query that computes the truth from the dataset (run by build_ground_truth.py).
+#
+# kind:
+#   number     truth_sql returns one number. Pass if the answer contains a number within `tol`
+#              (relative, default 1%). `abs: true` ignores sign ("dropped 53%" vs "-53%").
+#   exact      truth_sql returns one value. Pass if the answer contains it (case-insensitive).
+#   list       truth_sql returns one column. Pass if every value appears; `ordered: true` also
+#              checks the order.
+#   narrative  facts_sql returns rows showing what is true. An LLM judge grades the answer
+#              against `rubric` and those facts. `expects_chart: true` also needs a chart.
+#
+# Tables are named after the file: retail_sales, employees, support_tickets.
+
+questions:
+  # ---------- retail_sales ----------
+  - {id: r01, dataset: retail_sales, kind: number,
+     question: "What was the total revenue in 2025?",
+     truth_sql: "SELECT sum(revenue) FROM retail_sales WHERE year(order_date) = 2025"}
+  - {id: r02, dataset: retail_sales, kind: number, tol: 0,
+     question: "How many orders were placed in 2024?",
+     truth_sql: "SELECT count(*) FROM retail_sales WHERE year(order_date) = 2024"}
+  - {id: r03, dataset: retail_sales, kind: exact,
+     question: "Which region has the highest total revenue overall?",
+     truth_sql: "SELECT region FROM retail_sales GROUP BY region ORDER BY sum(revenue) DESC LIMIT 1"}
+  - {id: r04, dataset: retail_sales, kind: number,
+     question: "What was the average number of units per order in Q1 2025?",
+     truth_sql: "SELECT avg(units) FROM retail_sales WHERE order_date >= '2025-01-01' AND order_date < '2025-04-01'"}
+  - {id: r05, dataset: retail_sales, kind: list, ordered: true,
+     question: "List the top 3 products by total revenue, highest first.",
+     truth_sql: "SELECT product FROM retail_sales GROUP BY product ORDER BY sum(revenue) DESC LIMIT 3"}
+  - {id: r06, dataset: retail_sales, kind: number,
+     question: "What percentage of orders had a discount?",
+     truth_sql: "SELECT 100.0 * count(*) FILTER (WHERE discount > 0) / count(*) FROM retail_sales"}
+  - {id: r07, dataset: retail_sales, kind: number,
+     question: "How much revenue was given away in discounts in total, compared with list price (units x unit_price)?",
+     truth_sql: "SELECT sum(units * unit_price - revenue) FROM retail_sales"}
+  - {id: r08, dataset: retail_sales, kind: exact,
+     question: "Which month of 2024 had the highest revenue? Give the month name.",
+     truth_sql: "SELECT monthname(order_date) FROM retail_sales WHERE year(order_date) = 2024 GROUP BY 1 ORDER BY sum(revenue) DESC LIMIT 1"}
+  - {id: r09, dataset: retail_sales, kind: number, abs: true,
+     question: "By what percentage did West region revenue change from Q2 2025 to Q3 2025?",
+     truth_sql: "WITH q AS (SELECT quarter(order_date) AS q, sum(revenue) AS rev FROM retail_sales WHERE region = 'West' AND year(order_date) = 2025 GROUP BY 1) SELECT 100.0 * ((SELECT rev FROM q WHERE q = 3) - (SELECT rev FROM q WHERE q = 2)) / (SELECT rev FROM q WHERE q = 2)"}
+  # ---------- employees ----------
+  - {id: e01, dataset: employees, kind: number,
+     question: "What is the average salary in the Engineering department?",
+     truth_sql: "SELECT avg(salary) FROM employees WHERE department = 'Engineering'"}
+  - {id: e02, dataset: employees, kind: exact,
+     question: "Which department has the highest attrition rate (share of employees who left)?",
+     truth_sql: "SELECT department FROM employees GROUP BY department ORDER BY avg(left_company::INT) DESC LIMIT 1"}
+  - {id: e03, dataset: employees, kind: number,
+     question: "What is the overall attrition rate, as a percentage?",
+     truth_sql: "SELECT 100.0 * avg(left_company::INT) FROM employees"}
+  - {id: e04, dataset: employees, kind: number, tol: 0,
+     question: "How many remote employees have left the company?",
+     truth_sql: "SELECT count(*) FROM employees WHERE remote AND left_company"}
+  - {id: e05, dataset: employees, kind: list, ordered: true,
+     question: "Rank the departments by average salary, highest first.",
+     truth_sql: "SELECT department FROM employees GROUP BY department ORDER BY avg(salary) DESC"}
+  - {id: e06, dataset: employees, kind: number,
+     question: "What is the median salary across all employees?",
+     truth_sql: "SELECT median(salary) FROM employees"}
+
+  # ---------- support_tickets ----------
+  - {id: t01, dataset: support_tickets, kind: number, tol: 0,
+     question: "How many tickets are there in total?",
+     truth_sql: "SELECT count(*) FROM support_tickets"}
+  - {id: t02, dataset: support_tickets, kind: number,
+     question: "What is the average first response time in hours for urgent tickets?",
+     truth_sql: "SELECT avg(first_response_hours) FROM support_tickets WHERE priority = 'urgent'"}
+  - {id: t03, dataset: support_tickets, kind: exact,
+     question: "Which category has the most tickets?",
+     truth_sql: "SELECT category FROM support_tickets GROUP BY category ORDER BY count(*) DESC LIMIT 1"}
+  - {id: t04, dataset: support_tickets, kind: number, tol: 0,
+     question: "How many tickets are still open?",
+     truth_sql: "SELECT count(*) FROM support_tickets WHERE status = 'open'"}
+  - {id: t05, dataset: support_tickets, kind: number,
+     question: "What is the average customer satisfaction (csat) score? Ignore tickets with no score.",
+     truth_sql: "SELECT avg(csat) FROM support_tickets WHERE csat IS NOT NULL"}
+  - {id: t06, dataset: support_tickets, kind: number,
+     question: "What is the 90th percentile resolution time in hours for closed email tickets?",
+     truth_sql: "SELECT quantile_cont(resolution_hours, 0.9) FROM support_tickets WHERE channel = 'email' AND status = 'closed'"}
+
+  # ---------- narrative (LLM-judged) ----------
+  - {id: n01, dataset: retail_sales, kind: narrative,
+     question: "Why did West revenue drop in Q3 2025?",
+     facts_sql: "SELECT product, quarter(order_date) AS quarter, sum(units) AS units, round(sum(revenue), 2) AS revenue FROM retail_sales WHERE region = 'West' AND year(order_date) = 2025 AND quarter(order_date) IN (2, 3) GROUP BY ALL ORDER BY product, quarter",
+     rubric: "The answer must identify the Trail Pack collapse in West (49 units to 4, the steepest drop) as a main driver, supported by numbers consistent with the facts. Mentioning that Rain Shell also fell is fine. It must not blame discounts or prices."}
+  - {id: n02, dataset: retail_sales, kind: narrative,
+     question: "Compare the four regions and tell me which are strongest and weakest.",
+     facts_sql: "SELECT region, round(sum(revenue), 2) AS revenue, count(*) AS orders FROM retail_sales GROUP BY region ORDER BY revenue DESC",
+     rubric: "The answer must rank the regions in the same order as the facts, and any revenue figures it quotes must match the facts."}
+  - {id: n03, dataset: retail_sales, kind: narrative, expects_chart: true,
+     question: "Show me a chart of monthly revenue and say whether there is any clear seasonality.",
+     facts_sql: "SELECT strftime(order_date, '%Y-%m') AS month, round(sum(revenue), 2) AS revenue FROM retail_sales GROUP BY 1 ORDER BY 1",
+     rubric: "A chart was produced. The description of the trend must be consistent with the monthly facts; it must not claim strong seasonality if the monthly figures are broadly flat."}
+  - {id: n04, dataset: employees, kind: narrative,
+     question: "What seems to be related to employees leaving the company?",
+     facts_sql: "SELECT department, round(100 * avg(left_company::INT), 1) AS attrition_pct, count(*) AS people FROM employees GROUP BY department ORDER BY attrition_pct DESC",
+     rubric: "The answer must name the departments with the highest and lowest attrition correctly (using the facts), and must not claim a strong effect it did not measure."}
+  - {id: n05, dataset: employees, kind: narrative,
+     question: "Do remote employees get different performance ratings than office employees?",
+     facts_sql: "SELECT remote, round(avg(performance_rating), 2) AS avg_rating, count(*) AS people FROM employees GROUP BY remote",
+     rubric: "The answer must report both averages consistent with the facts and conclude that the difference is small or negligible if the facts show that."}
+  - {id: n06, dataset: employees, kind: narrative, expects_chart: true,
+     question: "Plot the salary distribution for each department and summarise what you see.",
+     facts_sql: "SELECT department, round(avg(salary)) AS avg_salary, min(salary) AS min_salary, max(salary) AS max_salary FROM employees GROUP BY department ORDER BY avg_salary DESC",
+     rubric: "A chart was produced. The summary must say which departments pay the most and least, consistent with the facts."}
+  - {id: n07, dataset: support_tickets, kind: narrative,
+     question: "Which support channel is the slowest to resolve tickets?",
+     facts_sql: "SELECT channel, round(avg(resolution_hours), 1) AS avg_resolution_hours, count(*) AS tickets FROM support_tickets WHERE status = 'closed' GROUP BY channel ORDER BY 2 DESC",
+     rubric: "The answer must name the slowest channel correctly and quote averages consistent with the facts. It must only use closed tickets or say how open tickets were handled."}
+  - {id: n08, dataset: support_tickets, kind: narrative,
+     question: "Did anything unusual happen to ticket volume over time? What drove it?",
+     facts_sql: "SELECT strftime(created_at, '%Y-%m') AS month, category, count(*) AS tickets FROM support_tickets GROUP BY ALL ORDER BY month, category",
+     rubric: "The answer must identify the March 2025 spike and attribute it to Billing tickets, with numbers consistent with the facts."}
+  - {id: n09, dataset: support_tickets, kind: narrative, expects_chart: true,
+     question: "Chart the weekly ticket volume and describe the trend.",
+     facts_sql: "SELECT strftime(date_trunc('week', created_at), '%Y-%m-%d') AS week, count(*) AS tickets FROM support_tickets GROUP BY 1 ORDER BY 1",
+     rubric: "A chart was produced. The trend description must mention the higher volume in March 2025 (a visible bump) and otherwise be consistent with the weekly facts."}

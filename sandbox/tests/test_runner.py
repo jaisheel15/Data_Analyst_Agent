@@ -133,3 +133,22 @@ def test_a_locked_database_is_reported_not_replaced_by_an_empty_one(dirs):
         writer.close()
     assert "busy" in result["error"]
     assert "does not exist" not in result["error"]
+
+
+def test_chart_saved_outside_out_and_closed_is_still_delivered(dirs):
+    # Models often savefig() into /scratch or /tmp and close the figure.
+    code = (
+        "import matplotlib.pyplot as plt\n"
+        "plt.plot([1, 2, 3])\n"
+        "plt.savefig(SCRATCH + '/salary_by_dept.png')\n"
+        "plt.close('all')\n"
+    )
+    result = run({**dirs, "mode": "python", "code": code})
+    assert result["files"] == ["salary_by_dept.png"]
+    assert (Path(dirs["out_dir"]) / "salary_by_dept.png").stat().st_size > 0
+
+
+def test_pngs_that_already_existed_in_scratch_are_not_redelivered(dirs):
+    (Path(dirs["scratch_dir"]) / "old.png").write_bytes(b"x")
+    result = run({**dirs, "mode": "python", "code": "print(1)"})
+    assert result["files"] == []

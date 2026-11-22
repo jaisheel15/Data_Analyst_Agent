@@ -1,4 +1,4 @@
-.PHONY: setup up down logs test test-go test-agent test-sandbox lint typecheck sandbox-image samples check-deploy
+.PHONY: setup up down logs test test-go test-agent test-sandbox lint typecheck sandbox-image samples check-deploy eval eval-truth eval-test
 
 setup: ## first-time setup: .env and data dir
 	@test -f .env || (cp .env.example .env && echo "created .env: add your API key")
@@ -41,3 +41,15 @@ samples: ## regenerate the sample datasets
 check-deploy: ## validate the production compose file and Caddyfile
 	DOMAIN=example.com docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml config -q
 	docker run --rm -e DOMAIN=example.com -v $(CURDIR)/deploy/Caddyfile:/etc/caddy/Caddyfile:ro caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
+PROVIDER ?= deepseek
+MODEL ?= deepseek-flash
+
+eval: ## run the eval suite on a running stack: make eval PROVIDER=deepseek MODEL=deepseek-flash
+	uv run --project evals python evals/run.py --provider $(PROVIDER) --model $(MODEL)
+
+eval-truth: ## recompute expected answers from the datasets
+	uv run --project evals python evals/build_ground_truth.py
+
+eval-test: ## unit tests for the scoring code
+	cd evals && uv run pytest -q
