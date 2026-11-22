@@ -49,7 +49,7 @@ const (
 
 type Config struct {
 	Image   string
-	Runtime string // "runsc" (gVisor) or "runc"; falls back to runc if missing
+	Runtime string // "runc" (plain Docker, the default) or "runsc" (gVisor, optional); falls back to runc if missing
 	Layout  storage.Layout
 	// HostRoot is Layout.Root as the Docker daemon sees it. They differ when
 	// this service itself runs in a container with the data dir bind-mounted.

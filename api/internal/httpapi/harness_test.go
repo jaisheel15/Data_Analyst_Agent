@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,11 +60,19 @@ type fakeAgent struct {
 	raw  [][]byte // request bodies exactly as Go sent them
 	run  func(ctx context.Context, req contract.RunRequest, emit func(contract.Event))
 	srv  *httptest.Server
+
+	unhealthy atomic.Bool // makes GET /health answer 503
 }
 
 func newFakeAgent(t *testing.T) *fakeAgent {
 	f := &fakeAgent{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			if f.unhealthy.Load() {
+				http.Error(w, "down", http.StatusServiceUnavailable)
+			}
+			return
+		}
 		if r.Header.Get("X-Internal-Token") != internalToken {
 			http.Error(w, "bad token", http.StatusUnauthorized)
 			return

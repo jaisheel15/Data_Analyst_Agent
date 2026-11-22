@@ -34,6 +34,7 @@ type Sandbox interface {
 // AgentRunner starts a run on the agent service and streams its events.
 type AgentRunner interface {
 	Run(ctx context.Context, req contract.RunRequest, emit func(contract.Event) error) error
+	Ping(ctx context.Context) error
 }
 
 type Config struct {
@@ -99,7 +100,16 @@ func (s *Server) Internal() http.Handler {
 	return r
 }
 
+// health is ok only when the agent service answers too: the API alone cannot
+// answer a question.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := s.Agent.Ping(ctx); err != nil {
+		slog.Warn("health: agent unreachable", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "agent unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

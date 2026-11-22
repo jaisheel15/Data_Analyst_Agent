@@ -153,7 +153,7 @@ The contract is defined in one place (`contracts/`, OpenAPI or JSON schema). Bot
 
 - One container per active session, reused within the session, and killed after 15 minutes idle.
 - **Go never mounts the raw Docker socket.** It talks to a **docker-socket-proxy** (for example `tecnativa/docker-socket-proxy`) that only allows the container create, start, exec, inspect, and kill/remove endpoints.
-- **Runtime:** `SANDBOX_RUNTIME=runsc` (gVisor) by default. At startup, Go checks that the runtime is available. If gVisor isn't installed, it falls back to `runc` and logs a warning. The README documents how to install gVisor.
+- **Runtime:** `SANDBOX_RUNTIME=runc` (plain Docker) by default, decided after v1 was built because the author runs it locally and chose Docker only. `runsc` (gVisor) stays supported: Go checks the runtime exists at startup and falls back to `runc` with a warning.
 - Image: Python slim plus pandas, numpy, duckdb, matplotlib, seaborn, scipy, and openpyxl/pyarrow. No pip install at runtime.
 - Limits: `--network none`, 1 CPU, 1 GB memory, pids limit, read-only root filesystem, non-root user, 30 s wall-clock timeout per call (enforced by killing the process).
 - Mounts: session data directory **read-only** (including `session.duckdb`); writable `/out` (charts) and `/scratch` (intermediate results).

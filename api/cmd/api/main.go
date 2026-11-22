@@ -67,7 +67,7 @@ func run() error {
 	}
 	sb, err := sandbox.New(ctx, docker, sandbox.Config{
 		Image:        env("SANDBOX_IMAGE", "daa-sandbox:latest"),
-		Runtime:      env("SANDBOX_RUNTIME", "runsc"),
+		Runtime:      env("SANDBOX_RUNTIME", "runc"),
 		Layout:       layout,
 		HostRoot:     env("HOST_DATA_DIR", layout.Root),
 		MaxSandboxes: envInt("MAX_SANDBOXES", 3),
