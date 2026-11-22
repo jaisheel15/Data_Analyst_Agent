@@ -120,6 +120,21 @@ def summarise(meta: dict, rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def rescore(path: Path) -> int:
+    """Regrade saved answers after a scorer fix. Narrative verdicts keep their stored judge result."""
+    saved = json.loads(path.read_text())
+    questions = {q["id"]: q for q in yaml.safe_load((HERE / "questions.yaml").read_text())["questions"]}
+    truth = json.loads((HERE / "ground_truth.json").read_text())
+    for row in saved["rows"]:
+        q = questions[row["id"]]
+        if q["kind"] != "narrative":
+            row["passed"], row["note"] = grade(q, truth[row["id"]], row, ("", ""))
+    path.write_text(json.dumps(saved, indent=1))
+    path.with_suffix(".md").write_text(summarise(saved["meta"], saved["rows"]))
+    print(path.with_suffix(".md").read_text())
+    return 0
+
+
 def estimate_per_question(provider: str, model: str, pricing: dict) -> float:
     """Average of earlier runs of this model if there are any, otherwise a rough guess from prices."""
     past = []
@@ -136,15 +151,20 @@ def estimate_per_question(provider: str, model: str, pricing: dict) -> float:
 def main() -> int:
     load_env()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--provider", required=True, choices=["anthropic", "deepseek"])
-    ap.add_argument("--model", required=True)
+    ap.add_argument("--provider", choices=["anthropic", "deepseek"])
+    ap.add_argument("--model")
     ap.add_argument("--api", default="http://localhost:8080/api")
     ap.add_argument("--only", help="comma-separated question ids")
     ap.add_argument("--judge-provider", default="deepseek")
     ap.add_argument("--judge-model", default="deepseek-flash")
     ap.add_argument("--budget", type=float, default=float(os.environ.get("EVAL_RUN_BUDGET_USD", "1.00")))
     ap.add_argument("--yes", action="store_true", help="skip the cost confirmation")
+    ap.add_argument("--rescore", type=Path, help="regrade a saved results file with the current scorers (free)")
     args = ap.parse_args()
+    if args.rescore:
+        return rescore(args.rescore)
+    if not (args.provider and args.model):
+        ap.error("--provider and --model are required")
 
     questions = yaml.safe_load((HERE / "questions.yaml").read_text())["questions"]
     if args.only:

@@ -6,7 +6,7 @@ Upload a CSV or Parquet file, ask a question in plain English, and watch an AI a
 
 [Full-quality demo video](docs/demo.mp4) (40 s, two questions on the sample retail data, played at 2x).
 
-> **Eval score:** 29/30 on `deepseek-flash` at about $0.002 per question (see [Evals](#evals)).
+> **Eval score:** 28/30 on `deepseek-flash` at about $0.002 per question (see [Evals](#evals)).
 
 ## Run it
 
@@ -73,9 +73,9 @@ make eval PROVIDER=deepseek MODEL=deepseek-flash      # needs the stack running
 
 Each question runs in a fresh session through the real API, so the whole pipeline is measured. The run prints an estimated cost first and stops if it reaches `EVAL_RUN_BUDGET_USD`. | Model | Accuracy | Numbers / names / lists | Open-ended | Cost per question | Latency p50 / p95 |
 |---|---|---|---|---|---|
-| `deepseek-flash` | 29/30 (97%) | 21/21 | 8/9 | $0.002 | 11 s / 34 s |
+| `deepseek-flash` | 28/30 (93%) | 21/21 | 7/9 | $0.002 | 10 s / 27 s |
 
-The open-ended answers are graded by the same model, which is a limit of this score. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
+The open-ended answers are graded by the same model, which is a limit of this score, and they vary between runs: two full runs gave 29/30 and 28/30, the difference being judge calls on open-ended answers. Results land in `evals/results/` as JSON plus a markdown summary: accuracy by question type, steps, self-corrections, cost, and p50/p95 latency.
 
 ## Tracing
 

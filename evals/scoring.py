@@ -41,7 +41,14 @@ def score_exact(answer: str, expected: str) -> bool:
 
 def score_list(answer: str, expected: list[str], ordered: bool = False) -> bool:
     text = _norm(answer)
-    positions = [text.find(_norm(v).strip()) for v in expected]
-    if any(p < 0 for p in positions):
-        return False
-    return positions == sorted(positions) if ordered else True
+    if not ordered:
+        return all(_norm(v).strip() in text for v in expected)
+    # In order: the values must appear as a subsequence, so an early mention of a
+    # later item ("...Support lowest") does not matter as long as the ranking follows.
+    at = 0
+    for value in expected:
+        found = text.find(_norm(value).strip(), at)
+        if found < 0:
+            return False
+        at = found + 1
+    return True

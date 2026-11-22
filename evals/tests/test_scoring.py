@@ -44,3 +44,10 @@ def test_list_order():
 def test_judge_verdict_parsing():
     assert parse_verdict('```json\n{"pass": true, "reason": "ok"}\n```') == (True, "ok")
     assert parse_verdict("no json")[0] is False
+
+
+def test_ordered_list_ignores_an_early_mention_of_a_later_item():
+    # A headline like "Engineering is highest and Support lowest" must not break the ranking that follows.
+    answer = "Engineering is highest, Support lowest.\n1. Engineering 2. Finance 3. Sales 4. Marketing 5. Support"
+    assert score_list(answer, ["Engineering", "Finance", "Sales", "Marketing", "Support"], ordered=True)
+    assert not score_list("1. Finance 2. Engineering", ["Engineering", "Finance"], ordered=True)
