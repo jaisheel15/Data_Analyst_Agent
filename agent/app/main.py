@@ -6,6 +6,7 @@ model, limits) and runs every tool. Closing the stream stops the run.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import logging
@@ -14,16 +15,17 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.language_models.chat_models import BaseChatModel
+from opentelemetry import context as otel_context
 
 from app.graph import build_graph
 from app.llm import MissingAPIKey, make_llm
 from app.prompts import build_messages
 from app.schemas import RunRequest, Usage
 from app.tools import ToolClient
-from app.tracing import setup_tracing
+from app.tracing import continue_trace, current_run_id, setup_logging, setup_tracing
 
 log = logging.getLogger("agent")
 
@@ -36,6 +38,9 @@ class Settings:
     go_internal_url: str = field(default_factory=lambda: os.environ.get("GO_INTERNAL_URL", "http://api:8081"))
     # Where to send traces (OTLP/HTTP). Empty turns tracing off.
     otlp_endpoint: str = field(default_factory=lambda: os.environ.get("TRACING_OTLP_ENDPOINT", ""))
+    # Keep prompts, code and outputs off spans.
+    hide_payloads: bool = field(default_factory=lambda: os.environ.get("TRACING_HIDE_PAYLOADS", "").lower()
+                                in ("1", "true", "yes", "on"))
 
 
 def create_app(settings: Settings | None = None, llm_factory: LLMFactory = make_llm,
@@ -54,7 +59,8 @@ def create_app(settings: Settings | None = None, llm_factory: LLMFactory = make_
         return {"status": "ok"}
 
     @app.post("/runs")
-    async def runs(req: RunRequest, x_internal_token: str | None = Header(default=None)) -> StreamingResponse:
+    async def runs(req: RunRequest, request: Request,
+                   x_internal_token: str | None = Header(default=None)) -> StreamingResponse:
         check_token(x_internal_token)
         try:
             llm = llm_factory(req.model.provider, req.model.name, req.limits.max_tokens)
@@ -66,12 +72,19 @@ def create_app(settings: Settings | None = None, llm_factory: LLMFactory = make_
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         tools = ToolClient(settings.go_internal_url, settings.internal_token, req.run_id, req.session_id,
                            transport=tool_transport)
-        return StreamingResponse(_events(req, llm, tools), media_type="application/x-ndjson")
+        # Join the trace Go started for this Run (from its traceparent header).
+        trace_ctx = continue_trace(request.headers)
+        return StreamingResponse(_events(req, llm, tools, trace_ctx), media_type="application/x-ndjson")
 
     return app
 
 
-async def _events(req: RunRequest, llm: BaseChatModel, tools: ToolClient) -> AsyncIterator[str]:
+async def _events(req: RunRequest, llm: BaseChatModel, tools: ToolClient,
+                  trace_ctx: otel_context.Context | None = None) -> AsyncIterator[str]:
+    # The body streams after the handler has returned, so the trace context
+    # must be attached here, inside the generator, not in the handler.
+    token = otel_context.attach(trace_ctx) if trace_ctx is not None else None
+    run_token = current_run_id.set(req.run_id)
     usage = Usage(provider=req.model.provider, model=req.model.name)
     graph = build_graph(llm, tools, usage, req.limits.max_steps)
     state = {"messages": build_messages(req), "steps": 0, "answer": "", "status": ""}
@@ -96,6 +109,12 @@ async def _events(req: RunRequest, llm: BaseChatModel, tools: ToolClient) -> Asy
                      "usage": usage.model_dump()})
     finally:
         await tools.aclose()
+        # A disconnect can close the generator from another context; then the
+        # tokens no longer apply, and there is nothing left to undo.
+        with contextlib.suppress(ValueError):
+            current_run_id.reset(run_token)
+        if token is not None:
+            otel_context.detach(token)  # logs rather than raises on a context mismatch
 
 
 def _line(event: dict) -> str:
@@ -103,8 +122,9 @@ def _line(event: dict) -> str:
 
 
 def app_from_env() -> FastAPI:  # uvicorn --factory app.main:app_from_env
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     settings = Settings()
-    if setup_tracing(settings.otlp_endpoint):
-        log.info("tracing on: sending spans to %s", settings.otlp_endpoint)
+    if setup_tracing(settings.otlp_endpoint, hide_payloads=settings.hide_payloads):
+        log.info("tracing on: sending spans to %s (hide payloads: %s)", settings.otlp_endpoint,
+                 settings.hide_payloads)
     return create_app(settings)

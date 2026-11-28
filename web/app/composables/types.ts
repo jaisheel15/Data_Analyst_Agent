@@ -1,4 +1,4 @@
-// Shapes of the Go public API (api/internal/httpapi).
+// Shapes of the Go public API (api/internal/{session,dataset,chat,tool,chart}/handler.go).
 
 export interface Column { name: string; type: string }
 

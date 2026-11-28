@@ -193,7 +193,13 @@ A background goroutine deletes sessions, files, and containers after 24 h.
 - **Data notice:** a one-line notice next to the upload box says not to upload sensitive data, because column names and sample rows are sent to the model provider (DeepSeek's API is hosted in China). The README states this, and that data is deleted after 24 h.
 - **Local run:** `docker compose up` starts Go API, Python agent, Postgres, Nuxt, the socket proxy, and the sandbox image build. The agent service is on the internal network only.
 - **Deploy-ready, not deployed:** `docker-compose.prod.yml` and a `Caddyfile` live in the repo. CI validates them, but nothing is hosted in v1.
-- **Tracing:** Langfuse or LangSmith in the Python service, with `run_id` attached. Structured JSON logs with `run_id` in both services.
+- **Tracing:** plain OpenTelemetry over OTLP/HTTP, so any backend works; Arize Phoenix is the bundled viewer (`make up-tracing`). Off unless `TRACING_OTLP_ENDPOINT` is set, and then every trace is kept (no sampling). (This replaces the earlier plan of Langfuse or LangSmith: OTLP keeps the backend swappable, and Langfuse can take in OTLP too.)
+  - **One Run is one trace**, across both services. Go starts it with a `chat.run` span (attributes: `run.id`, `session.id`, `run.purpose`, model, `run.status`, token counts, `run.cost_usd`) and sends a W3C `traceparent` with `POST /runs`. The agent continues it (OpenInference LangChain spans, one `tool.<name>` span per tool call) and sends `traceparent` on each tool request. Go continues it again: `tool.<name>`, then `sandbox.acquire` (reused or created), `sandbox.exec` and `chart.keep`. Postgres queries get no spans. Spans from both services share the Phoenix project `data-analyst-agent`, as `analyst-api` and `analyst-agent`.
+  - **Errors mean faults.** A Run ending in `error` marks its root span as an error. `done`, `budget_exhausted` and `cancelled` do not; `run.status` says which. A *tool error* (the model's SQL or Python was wrong) leaves the tool span OK with `tool.error` set, because the model reads it and retries. A *tool failure* (sandbox timeout, OOM, crashed runner, tool service unreachable) marks it as an error. Go decides which is which, because it knows the sandbox's exit codes.
+  - **Streaming:** each graph node that calls the model records `llm.time_to_first_token_ms`, and an `answer_reset` event when a preamble is withdrawn. Per-token deltas are not recorded.
+  - **Payloads:** prompts, completions and code are recorded, and tool output and code are cut to 2 KB. `TRACING_HIDE_PAYLOADS=true` keeps all of it off the spans in both services.
+  - **Logs:** JSON lines in both services. Lines logged during a Run carry `trace_id` and `span_id` (and `run_id` in the agent), so you can go from a log line to its trace. You find a Run's trace by searching Phoenix for its `run.id`. No trace id is stored in Postgres.
+  - The browser is not traced.
 
 ### 7.9 Frontend (Nuxt + TypeScript)
 
@@ -223,7 +229,7 @@ A background goroutine deletes sessions, files, and containers after 24 h.
 
 ```
 data-analyst-agent/
-  api/        Go: cmd/api, internal/{http,sessions,datasets,tools,sandbox,agentclient,cost,db}
+  api/        Go: cmd/api, internal/{session,dataset,chat,run,tool,chart,budget,agent,sandbox,platform}, one package per domain, Gin
   agent/      Python: app/{main.py,graph.py,tools.py,llm.py,prompts/}  tests/
   sandbox/    Dockerfile  runner.py
   web/        Nuxt app
