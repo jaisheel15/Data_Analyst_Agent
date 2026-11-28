@@ -21,6 +21,7 @@ from langgraph.graph.message import add_messages
 from app.prompts import WRAP_UP
 from app.schemas import Usage
 from app.tools import TOOLS, ToolClient
+from app.tracing import FirstToken, mark_failure, node_span, payload, tool_span
 
 
 class RunState(TypedDict):
@@ -52,7 +53,9 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
         """
         write = get_stream_writer()
         reply, sent = None, False
+        first = FirstToken()
         async for chunk in model.astream(messages):
+            first.saw_token()
             reply = chunk if reply is None else reply + chunk
             piece = text_of(chunk)
             if piece:
@@ -62,6 +65,7 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
             raise RuntimeError("the model returned an empty response")
         if reply.tool_calls and sent:
             write({"type": "answer_reset"})
+            node_span().add_event("answer_reset", {"withdrawn_chars": len(text_of(reply))})
         return reply, sent
 
     def finish(message: AIMessage, status: str) -> dict:
@@ -92,7 +96,14 @@ def build_graph(llm: BaseChatModel, tools: ToolClient, usage: Usage, max_steps: 
             steps += 1
             write({"type": "step_start", "step": steps})
             write({"type": "tool_call", "step": steps, "tool": call["name"], "input": call["args"]})
-            result = await tools.call(call["name"], call["args"])
+            with tool_span(call["name"], steps, call["args"]) as span:
+                result = await tools.call(call["name"], call["args"])
+                payload(span, "output.value", result.output)
+                if result.error:
+                    payload(span, "tool.error", result.error)
+                    span.set_attribute("tool.failed", result.failed)
+                if result.failed:
+                    mark_failure(span, result.error)
             write({"type": "tool_result", "step": steps, "tool": call["name"], "summary": result.summary(),
                    "error": result.error, "chart_ids": result.chart_ids})
             results.append(ToolMessage(result.for_model(), tool_call_id=call["id"]))

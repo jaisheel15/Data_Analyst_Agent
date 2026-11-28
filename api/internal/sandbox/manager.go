@@ -14,11 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"dataanalyst/api/internal/storage"
+	"dataanalyst/api/internal/platform/storage"
+	"dataanalyst/api/internal/platform/telemetry"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrAtCapacity means MaxSandboxes containers are already running.
@@ -81,7 +84,15 @@ type Result struct {
 	Rows      [][]any  `json:"rows"`
 	TotalRows int      `json:"total_rows"`
 	TimedOut  bool     `json:"timed_out"`
+
+	// Fault is set by the Manager when the sandbox itself failed (timeout,
+	// out of memory, crashed runner), as opposed to the agent's code failing.
+	// That is a Tool failure, not a Tool error.
+	Fault bool `json:"-"`
 }
+
+// Failed reports whether the sandbox failed to do its job (a Tool failure).
+func (r Result) Failed() bool { return r.Fault || r.TimedOut }
 
 // box is one session's sandbox. Lock order: Manager.mu, then box.mu (only
 // ever TryLock'd while Manager.mu is held, so the order cannot deadlock).
@@ -140,13 +151,45 @@ func (m *Manager) Runtime() string { return m.runtime }
 // Exec runs one request in the session's sandbox, creating it if needed.
 // Failures of the agent's code come back in Result.Error, not as an error.
 func (m *Manager) Exec(ctx context.Context, sessionID string, req Request) (Result, error) {
-	b, err := m.lockedBox(ctx, sessionID)
+	b, err := m.tracedLockedBox(ctx, sessionID)
 	if err != nil {
 		return Result{}, err
 	}
 	defer b.mu.Unlock()
 	defer m.touch(b)
 
+	ctx, span := telemetry.Start(ctx, "sandbox.exec",
+		trace.WithAttributes(attribute.String("sandbox.mode", req.Mode), attribute.String("sandbox.runtime", m.runtime)))
+	defer span.End()
+	res, err := m.exec(ctx, sessionID, b, req)
+	span.SetAttributes(attribute.Bool("sandbox.timed_out", res.TimedOut))
+	switch {
+	case ctx.Err() != nil: // the Run was cancelled: not a fault
+		span.SetAttributes(attribute.Bool("sandbox.cancelled", true))
+	case err != nil:
+		span.RecordError(err)
+		telemetry.Fail(span, err.Error())
+	case res.Failed():
+		telemetry.Fail(span, res.Error)
+	}
+	return res, err
+}
+
+// tracedLockedBox is lockedBox inside a sandbox.acquire span that says
+// whether the call reused a sandbox or had to start one (a cold start).
+func (m *Manager) tracedLockedBox(ctx context.Context, sessionID string) (*box, error) {
+	ctx, span := telemetry.Start(ctx, "sandbox.acquire")
+	defer span.End()
+	b, how, err := m.lockedBox(ctx, sessionID)
+	span.SetAttributes(attribute.String("sandbox.acquire", how))
+	if err != nil {
+		span.RecordError(err)
+		telemetry.Fail(span, err.Error())
+	}
+	return b, err
+}
+
+func (m *Manager) exec(ctx context.Context, sessionID string, b *box, req Request) (Result, error) {
 	res, err := m.execOnce(ctx, b, req)
 	switch {
 	case err == nil || ctx.Err() != nil:
@@ -154,7 +197,8 @@ func (m *Manager) Exec(ctx context.Context, sessionID string, req Request) (Resu
 	case errors.Is(err, errHung):
 		// The code started but never let go (for example a fork bomb). Throw
 		// the container away; files in /scratch survive on the host.
-		slog.Warn("sandbox hung, recreating container", "session", sessionID)
+		slog.WarnContext(ctx, "sandbox hung, recreating container", "session", sessionID)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("sandbox.recreated", true))
 		if rerr := m.recreate(ctx, sessionID, b); rerr != nil {
 			return Result{}, rerr
 		}
@@ -162,7 +206,8 @@ func (m *Manager) Exec(ctx context.Context, sessionID string, req Request) (Resu
 	case errors.Is(err, errBeforeStart):
 		// The container is probably dead (for example OOM-killed). The code
 		// never ran, so recreating and retrying once is safe.
-		slog.Warn("sandbox unavailable, recreating container", "session", sessionID, "err", err)
+		slog.WarnContext(ctx, "sandbox unavailable, recreating container", "session", sessionID, "err", err)
+		trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("sandbox.recreated", true))
 		if rerr := m.recreate(ctx, sessionID, b); rerr != nil {
 			return Result{}, errors.Join(err, rerr)
 		}
@@ -175,7 +220,7 @@ func (m *Manager) Exec(ctx context.Context, sessionID string, req Request) (Resu
 var errHung = errors.New("sandbox: exec did not finish")
 
 func (m *Manager) timedOut() Result {
-	return Result{TimedOut: true,
+	return Result{TimedOut: true, Fault: true,
 		Error: fmt.Sprintf("timed out after %s: the code was stopped", m.cfg.CallTimeout)}
 }
 
@@ -230,6 +275,8 @@ func (m *Manager) execOnce(ctx context.Context, b *box, req Request) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("sandbox.exit_code", exit),
+		attribute.Int64("sandbox.elapsed_ms", elapsed.Milliseconds()))
 	return m.interpret(exit, elapsed, stdout.Bytes(), stderr.String()), nil
 }
 
@@ -243,16 +290,16 @@ func (m *Manager) interpret(exit int, elapsed time.Duration, stdout []byte, stde
 		if err := dec.Decode(&res); err == nil {
 			return res
 		}
-		return Result{Error: "sandbox runner produced invalid output: " + tail(stderr, 500)}
+		return Result{Fault: true, Error: "sandbox runner produced invalid output: " + tail(stderr, 500)}
 	}
 	if exit == 137 && elapsed >= m.cfg.CallTimeout-200*time.Millisecond {
 		return m.timedOut()
 	}
 	if exit == 137 {
-		return Result{Error: fmt.Sprintf("process was killed, most likely for exceeding the %d MB memory limit",
+		return Result{Fault: true, Error: fmt.Sprintf("process was killed, most likely for exceeding the %d MB memory limit",
 			m.cfg.MemoryBytes>>20)}
 	}
-	return Result{Error: fmt.Sprintf("sandbox runner exited with code %d: %s", exit, tail(stderr, 500))}
+	return Result{Fault: true, Error: fmt.Sprintf("sandbox runner exited with code %d: %s", exit, tail(stderr, 500))}
 }
 
 // killStragglers ends any process the agent's code left behind (for example
@@ -292,39 +339,49 @@ func (m *Manager) exitCode(ctx context.Context, execID string) (int, error) {
 	return 0, errors.New("exec still running after output closed")
 }
 
+// Ways a call gets its sandbox, as recorded on the sandbox.acquire span.
+const (
+	acquireReused  = "reused"
+	acquireCreated = "created"
+	acquireEvicted = "created_after_evicting" // another session's idle sandbox made room
+)
+
 // lockedBox returns the session's sandbox with its mu held, creating it (and
-// evicting an idle sandbox if at capacity) when needed.
-func (m *Manager) lockedBox(ctx context.Context, sessionID string) (*box, error) {
+// evicting an idle sandbox if at capacity) when needed. how is one of the
+// acquire* values.
+func (m *Manager) lockedBox(ctx context.Context, sessionID string) (b *box, how string, err error) {
 	for {
-		b, err := m.acquire(ctx, sessionID)
+		b, how, err = m.acquire(ctx, sessionID)
 		if err != nil {
-			return nil, err
+			return nil, how, err
 		}
 		b.mu.Lock()
 		m.mu.Lock()
 		removed := b.removed
 		m.mu.Unlock()
 		if !removed {
-			return b, nil
+			return b, how, nil
 		}
 		b.mu.Unlock() // reaped or evicted while we waited: get a fresh one
 	}
 }
 
-func (m *Manager) acquire(ctx context.Context, sessionID string) (*box, error) {
+func (m *Manager) acquire(ctx context.Context, sessionID string) (*box, string, error) {
 	m.mu.Lock()
 	if b, ok := m.boxes[sessionID]; ok {
 		b.lastUsed = time.Now() // so the reaper does not pick it while we wait for b.mu
 		m.mu.Unlock()
-		return b, nil
+		return b, acquireReused, nil
 	}
+	how := acquireCreated
 	var victim *box
 	if len(m.boxes) >= m.cfg.MaxSandboxes {
 		victim = m.evictLocked()
 		if victim == nil {
 			m.mu.Unlock()
-			return nil, ErrAtCapacity
+			return nil, "at_capacity", ErrAtCapacity
 		}
+		how = acquireEvicted
 	}
 	// Reserve the slot with a locked placeholder, then create the container
 	// without holding m.mu: Docker calls are slow.
@@ -345,11 +402,11 @@ func (m *Manager) acquire(ctx context.Context, sessionID string) (*box, error) {
 		b.removed = true
 		m.mu.Unlock()
 		b.mu.Unlock()
-		return nil, err
+		return nil, how, err
 	}
 	b.containerID = id
 	b.mu.Unlock()
-	return b, nil
+	return b, how, nil
 }
 
 // evictLocked drops the least recently used sandbox that is not running code.

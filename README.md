@@ -79,9 +79,26 @@ The open-ended answers are graded by the same model, which is a limit of this sc
 
 ## Tracing
 
-Off by default. `make up-tracing` also starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at <http://localhost:6006>, and every run shows up as a trace: each model call with its prompt, tokens (including cached ones) and latency, and each graph step. Spans carry the same `run_id` and `session_id` as the Postgres rows, so a slow or wrong answer can be matched to its trace. It uses OpenTelemetry (OpenInference's LangChain instrumentation), so any OTLP backend works: set `TRACING_OTLP_ENDPOINT` instead.
+Off by default. `make up-tracing` also starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at <http://localhost:6006>. Every run (one question) is one trace across both services:
 
-Traces contain prompts and sample rows. Phoenix runs locally with its data in a Docker volume, bound to 127.0.0.1.
+```
+chat.run                         Go: run id, session, purpose (chat/eval), model, status, tokens, cost
+└─ POST /runs → analyst-run      agent: LangGraph nodes, each model call with prompt, tokens, time to first token
+   └─ tool.run_sql …             agent: one span per tool call, with its step number
+      └─ POST /internal/tools    Go continues the trace (traceparent)
+         └─ tool.run_sql         Go: input, output, error
+            ├─ sandbox.acquire   reused, or created (a cold start)
+            ├─ sandbox.exec      exit code, elapsed, timed out
+            └─ chart.keep
+```
+
+**Find a run's trace:** search Phoenix for its `run.id` (the `run_id` in the `done` event and in `agent_runs`). Log lines from both services are JSON and carry `trace_id`, so a log line also leads to its trace.
+
+**What turns red:** only real faults. A run that ends in `error`, or a tool call the sandbox could not carry out (timeout, out of memory, crash, tool service unreachable). SQL or Python the model got wrong is a normal step it retries, so that span stays green and carries `tool.error`. Runs that hit the step budget or that the user cancelled stay green too, with `run.status` saying how they ended.
+
+It is plain OpenTelemetry (OTLP/HTTP), so any OTLP backend works: set `TRACING_OTLP_ENDPOINT` to its traces URL.
+
+Traces contain prompts, code and sample rows, with code and tool output cut to 2 KB per span. Set `TRACING_HIDE_PAYLOADS=true` to keep them out entirely. Phoenix runs locally with its data in a Docker volume, bound to 127.0.0.1.
 
 ## Development
 

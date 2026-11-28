@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"dataanalyst/api/internal/db"
+	"dataanalyst/api/internal/platform/db"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"

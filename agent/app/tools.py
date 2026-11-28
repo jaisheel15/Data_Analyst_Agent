@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import httpx
 from pydantic import BaseModel, Field
 
+from app.tracing import inject_trace
+
 
 class describe_dataset(BaseModel):
     """List the uploaded tables with their columns, types, row counts and a few sample rows.
@@ -42,6 +44,10 @@ class ToolResult:
     output: str
     error: str
     chart_ids: list[str]
+    # True when Go could not be reached or refused the call: a Tool failure,
+    # not a Tool error in the agent's code. (Failures inside Go, such as a
+    # sandbox timeout, are marked on Go's own spans.)
+    failed: bool = False
 
     def for_model(self) -> str:
         """The text the model reads back as the tool result."""
@@ -67,13 +73,16 @@ class ToolClient:
         self._session_id = session_id
 
     async def call(self, name: str, args: dict) -> ToolResult:
+        headers: dict[str, str] = {}
+        inject_trace(headers)  # Go's tool span joins the current trace
         try:
-            resp = await self._http.post(f"/internal/tools/{name}", json={
+            resp = await self._http.post(f"/internal/tools/{name}", headers=headers, json={
                 "run_id": self._run_id, "session_id": self._session_id, "input": args})
         except httpx.HTTPError as exc:
-            return ToolResult("", f"tool service unreachable: {exc}", [])
+            return ToolResult("", f"tool service unreachable: {exc}", [], failed=True)
         if resp.status_code != 200:
-            return ToolResult("", f"tool service returned {resp.status_code}: {resp.text[:300]}", [])
+            return ToolResult("", f"tool service returned {resp.status_code}: {resp.text[:300]}", [],
+                              failed=True)
         body = resp.json()
         return ToolResult(body.get("output", ""), body.get("error", "") or "", body.get("chart_ids") or [])
 

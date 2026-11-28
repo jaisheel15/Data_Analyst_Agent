@@ -81,6 +81,7 @@ class FakeGo:
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.headers: list[httpx.Headers] = []
         self.respond: Callable[[str, dict], dict] = lambda name, body: {
             "output": f"{name} ok", "chart_ids": []}
 
@@ -89,6 +90,7 @@ class FakeGo:
         name = request.url.path.rsplit("/", 1)[-1]
         body = json.loads(request.content)
         self.requests.append({"tool": name, **body})
+        self.headers.append(request.headers)
         return httpx.Response(200, json=self.respond(name, body))
 
 
@@ -128,8 +130,10 @@ def run_request(**overrides) -> dict:
     return req
 
 
-async def stream_run(client: httpx.AsyncClient, body: dict, token: str = TOKEN) -> tuple[int, list[dict]]:
-    async with client.stream("POST", "/runs", json=body, headers={"X-Internal-Token": token}) as resp:
+async def stream_run(client: httpx.AsyncClient, body: dict, token: str = TOKEN,
+                     headers: dict[str, str] | None = None) -> tuple[int, list[dict]]:
+    async with client.stream("POST", "/runs", json=body,
+                             headers={"X-Internal-Token": token, **(headers or {})}) as resp:
         if resp.status_code != 200:
             await resp.aread()
             return resp.status_code, []
